@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rnnoise-mlx"
+version = "0.1.0"
+description = "MLX training for an RNNoise-family denoiser"
+requires-python = ">=3.11"
+license = "BSD-3-Clause"
+dependencies = ["mlx>=0.32,<0.33", "numpy>=2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+rnnoise-mlx-train = "rnnoise_mlx.train:main"
+rnnoise-mlx-state-diagnostics = "rnnoise_mlx.state_diagnostics:main"
+
+[tool.setuptools]
+package-dir = {"" = "training"}
+
+[tool.pytest.ini_options]
+pythonpath = ["training"]
+testpaths = ["training/tests"]
