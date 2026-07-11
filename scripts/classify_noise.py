@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Classify noise WAVs by stationarity and transient content.
 
-The thresholds are intentionally exposed: use --calibrate to inspect corpus
-quantiles before treating the labels as final.
+The thresholds are intentionally exposed and should be calibrated against the
+target corpus before treating the labels as final.
 """
 
 from __future__ import annotations
