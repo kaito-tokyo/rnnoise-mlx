@@ -10,3 +10,6 @@ stack. This repository will consume the pinned fork as a submodule once the
 DSP build target is introduced; neural weights from that repository are not
 part of release artifacts.
 
+Apply [`patches/rnnoise-rir-macos.patch`](../patches/rnnoise-rir-macos.patch)
+to the pinned revision before building `dump_features`. The patch also moves
+the sequence-sized weighted-RMS buffer off the stack.

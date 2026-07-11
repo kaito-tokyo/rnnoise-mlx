@@ -1,0 +1,91 @@
+diff --git a/src/dump_features.c b/src/dump_features.c
+index dc2d8c3..5dca6d6 100644
+--- a/src/dump_features.c
++++ b/src/dump_features.c
+@@ -62,10 +62,15 @@ struct rir_list {
+ 
+ kiss_fft_cpx *load_rir(const char *rir_file, kiss_fft_state *fft, int early) {
+   kiss_fft_cpx *x, *X;
+-  float rir[RIR_MAX_DURATION];
++  float *rir;
+   int len;
+   int i;
+   FILE *f;
++  rir = (float *)malloc(RIR_MAX_DURATION*sizeof(*rir));
++  if (rir == NULL) {
++    fprintf(stderr, "cannot allocate RIR input buffer\n");
++    exit(1);
++  }
+   f = fopen(rir_file, "rb");
+   if (f==NULL) {
+     fprintf(stderr, "cannot open %s: %s\n", rir_file, strerror(errno));
+@@ -82,6 +87,7 @@ kiss_fft_cpx *load_rir(const char *rir_file, kiss_fft_state *fft, int early) {
+   }
+   for (i=0;i<len;i++) x[i].r = rir[i];
+   rnn_fft_c(fft, x, X);
++  free(rir);
+   free(x);
+   fclose(f);
+   return X;
+@@ -118,10 +124,14 @@ void load_rir_list(const char *list_file, struct rir_list *rirs) {
+ 
+ void rir_filter_sequence(const struct rir_list *rirs, float *audio, int rir_id, int early) {
+   int i;
+-  kiss_fft_cpx x[RIR_FFT_SIZE] = {{0,0}};
+-  kiss_fft_cpx y[RIR_FFT_SIZE] = {{0,0}};
+-  kiss_fft_cpx X[RIR_FFT_SIZE] = {{0,0}};
++  kiss_fft_cpx *x = (kiss_fft_cpx *)calloc(RIR_FFT_SIZE, sizeof(*x));
++  kiss_fft_cpx *y = (kiss_fft_cpx *)calloc(RIR_FFT_SIZE, sizeof(*y));
++  kiss_fft_cpx *X = (kiss_fft_cpx *)calloc(RIR_FFT_SIZE, sizeof(*X));
+   const kiss_fft_cpx *Y;
++  if (x == NULL || y == NULL || X == NULL) {
++    fprintf(stderr, "cannot allocate RIR FFT buffers\n");
++    exit(1);
++  }
+   if (early) Y = rirs->early[rir_id];
+   else Y = rirs->rir[rir_id];
+   i=0;
+@@ -141,6 +151,9 @@ void rir_filter_sequence(const struct rir_list *rirs, float *audio, int rir_id,
+     for (j=0;j<IMIN(SEQUENCE_SAMPLES-i, RIR_FFT_SIZE/2);j++) audio[i+j] = y[RIR_FFT_SIZE/2+j].r;
+     i += RIR_FFT_SIZE/2;
+   }
++  free(x);
++  free(y);
++  free(X);
+ }
+ 
+ static unsigned rand_lcg(unsigned *seed) {
+@@ -282,13 +295,19 @@ static void clear_vad(float *x, int *vad) {
+ 
+ static float weighted_rms(float *x) {
+   int i;
+-  float tmp[SEQUENCE_SAMPLES];
++  float *tmp;
+   float weighting_b[2] = {-2.f, 1.f};
+   float weighting_a[2] = {-1.89f, .895f};
+   float mem[2] = {0};
+   float mse = 1e-15f;
++  tmp = (float *)malloc(SEQUENCE_SAMPLES*sizeof(*tmp));
++  if (tmp == NULL) {
++    fprintf(stderr, "cannot allocate weighted RMS buffer\n");
++    exit(1);
++  }
+   rnn_biquad(tmp, mem, x, weighting_b, weighting_a, SEQUENCE_SAMPLES);
+   for (i=0;i<SEQUENCE_SAMPLES;i++) mse += tmp[i]*tmp[i];
++  free(tmp);
+   return 0.9506*sqrt(mse/SEQUENCE_SAMPLES);
+ }
+ 
+diff --git a/src/kiss_fft.c b/src/kiss_fft.c
+index 97c4291..552247e 100644
+--- a/src/kiss_fft.c
++++ b/src/kiss_fft.c
+@@ -520,7 +520,7 @@ void rnn_fft_impl(const kiss_fft_state *st,kiss_fft_cpx *fout)
+     int m2, m;
+     int p;
+     int L;
+-    int fstride[MAXFACTORS];
++    int fstride[MAXFACTORS + 1];
+     int i;
+     int shift;
+ 
