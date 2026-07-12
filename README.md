@@ -63,9 +63,25 @@ and [the reproducible test-training procedure](docs/test-training.md).
 
 The training command requires an MLflow tracking URI, experiment, and run name.
 It checks the server before evaluation or optimization, logs loss every ten
-updates, records initial/trained/reloaded evaluation, and uploads only the final
-`model.safetensors` and `training.json` artifacts. Keep machine-specific values
-outside the repository and pass them through the three MLflow CLI options.
+updates, records initial/trained/reloaded evaluation, and uploads the final
+`model.safetensors`, `training.json`, and every complete checkpoint. Keep
+machine-specific values outside the repository and pass them through the three
+MLflow CLI options.
+
+Training writes a complete checkpoint at every `--checkpoint-every` updates
+(32 by default) under `OUTPUT/checkpoints/update-NNNNNNNN/`. Each checkpoint
+contains model weights, AdamW state, MLX random state, the data cursor, elapsed
+counters, and training history. Resume with:
+
+```sh
+python -m rnnoise_mlx.training.train ... \
+  --resume-from OUTPUT/checkpoints/update-00000500
+```
+
+Checkpoints are committed only at batch boundaries, so prefetched input cannot
+move the saved data cursor past the next batch. The legacy `--stateful-tbptt`
+mode finishes its current batch before checkpointing, so `--max-updates` can be
+rounded up to that safe boundary.
 
 ## Generated artifacts
 
