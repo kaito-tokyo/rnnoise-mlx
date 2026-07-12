@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Export an MLX SafeTensors checkpoint to the compact C/BNNS bundle format."""
 
 from __future__ import annotations
@@ -10,7 +9,7 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
-from rnnoise_weights import TENSORS, write_bundle
+from .rnnoise_weights import TENSORS, write_bundle
 
 
 def main() -> None:

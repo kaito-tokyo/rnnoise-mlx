@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Compare an official PyTorch RNNoise checkpoint with its BNNSGraph conversion."""
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ import tempfile
 import numpy as np
 import torch
 
-from rnnoise_weights import infer_streaming, read_bundle
+from .rnnoise_weights import infer_streaming, read_bundle
 
 
 def main() -> None:

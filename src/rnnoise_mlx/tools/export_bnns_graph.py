@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Export a canonical RNNoise bundle as a Core ML BNNSGraph package."""
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from coremltools.converters.mil import Builder as mb
 from coremltools.converters.mil.mil import types
 import numpy as np
 
-from rnnoise_weights import read_bundle
+from .rnnoise_weights import read_bundle
 
 
 def main() -> None:

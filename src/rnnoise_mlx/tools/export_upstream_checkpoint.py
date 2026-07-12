@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Bridge an MLX test model to upstream's temporary C weight exporter.
 
 This is a validation-only bridge. The stable deployment format remains the

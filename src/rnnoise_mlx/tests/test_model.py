@@ -1,11 +1,14 @@
+"""Tests for the MLX model, loss, and recurrent-state behavior."""
+
 import mlx.core as mx
 import numpy as np
 import tempfile
 from pathlib import Path
 
-from rnnoise_mlx.loss import rnnoise_loss
-from rnnoise_mlx.model import ModelConfig, RNNoise
-from rnnoise_mlx.state_diagnostics import stale_state_diagnostic, trace_chunks
+from rnnoise_mlx.training.loss import rnnoise_loss
+from rnnoise_mlx.training.model import ModelConfig, RNNoise
+from rnnoise_mlx.training.state_diagnostics import stale_state_diagnostic, trace_chunks
+from rnnoise_mlx.training.tracking import _flatten_metrics
 
 
 def test_shapes_and_finite_loss():
@@ -70,3 +73,15 @@ def test_stale_state_diagnostic_preserves_checkpoint():
         assert result["checkpoint_hash_unchanged"]
         assert result["next_gain_relative_error"] >= 0
         assert result["next_vad_relative_error"] >= 0
+
+
+def test_mlflow_evaluation_metrics_are_flat_and_numeric():
+    metrics = _flatten_metrics(
+        "eval_initial",
+        {"total_loss": 0.5, "finite": True, "batches": 4, "label": "ignored"},
+    )
+    assert metrics == {
+        "eval_initial_total_loss": 0.5,
+        "eval_initial_finite": 1.0,
+        "eval_initial_batches": 4.0,
+    }

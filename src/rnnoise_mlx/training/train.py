@@ -1,3 +1,5 @@
+"""RNNoise-MLX model training command."""
+
 from __future__ import annotations
 
 import argparse
@@ -16,6 +18,7 @@ from .data import FeatureDataset
 from .evaluate import evaluate
 from .loss import rnnoise_loss, rnnoise_loss_aligned
 from .model import ModelConfig, RNNoise
+from .tracking import MLflowTracker
 
 
 def main():
@@ -59,6 +62,9 @@ def main():
         "--segmented-tbptt-state", choices=("carry", "reset"), default="carry"
     )
     parser.add_argument("--equalize-reset-targets", action="store_true")
+    parser.add_argument("--mlflow-tracking-uri", required=True)
+    parser.add_argument("--mlflow-experiment", required=True)
+    parser.add_argument("--mlflow-run-name", required=True)
     args = parser.parse_args()
 
     if args.two_segment_tbptt and args.segmented_tbptt_length:
@@ -68,6 +74,14 @@ def main():
 
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
+    tracker = MLflowTracker(
+        args.mlflow_tracking_uri,
+        args.mlflow_experiment,
+        args.mlflow_run_name,
+        output.resolve(),
+        vars(args),
+    )
+    print(json.dumps({"mlflow_run_id": tracker.run_id}), flush=True)
     dataset = FeatureDataset(args.features, args.sequence_length)
     mx.random.seed(args.seed)
     rng = np.random.default_rng(args.seed)
@@ -77,6 +91,7 @@ def main():
     optimizer = optim.AdamW(learning_rate=learning_rate, betas=(0.8, 0.98), eps=1e-8)
     eval_dataset = FeatureDataset(args.eval_features, args.sequence_length) if args.eval_features else None
     initial_evaluation = evaluate(model, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
+    tracker.log_evaluation("initial", initial_evaluation, 0)
 
     def objective(model, features, gain, vad):
         pred_gain, pred_vad, _ = model(features)
@@ -206,8 +221,8 @@ def main():
     def collect_pending():
         if not pending_losses:
             return
-        mx.eval(*(loss for _, _, loss in pending_losses))
-        for pending_update, pending_epoch, pending_loss in pending_losses:
+        mx.eval(*(loss for _, _, _, loss in pending_losses))
+        for pending_update, pending_epoch, pending_frames, pending_loss in pending_losses:
             record = {
                 "update": pending_update,
                 "epoch": pending_epoch,
@@ -216,6 +231,13 @@ def main():
             history.append(record)
             if pending_update % 10 == 0:
                 print(json.dumps(record), flush=True)
+                tracker.log_training(
+                    pending_update,
+                    pending_epoch,
+                    record["loss"],
+                    learning_rate(pending_update),
+                    pending_frames,
+                )
         pending_losses.clear()
 
     for epoch in range(1, args.epochs + 1):
@@ -256,7 +278,7 @@ def main():
                     if args.stateful_tbptt and not segment_length
                     else features.shape[1]
                 )
-                pending_losses.append((update, epoch, loss))
+                pending_losses.append((update, epoch, processed_frames, loss))
                 if args.sync_eval:
                     mx.eval(model.state, optimizer.state, loss)
                 else:
@@ -306,6 +328,7 @@ def main():
         "history": history,
     }
     (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
+    tracker.complete(summary, output)
 
 
 if __name__ == "__main__":

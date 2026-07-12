@@ -1,6 +1,8 @@
+"""Tests for deterministic base-dataset preparation."""
+
 from pathlib import Path
 
-from training.scripts.prepare_base_dataset import partition, stable_order, stable_score
+from rnnoise_mlx.tools.prepare_base_dataset import partition, stable_order, stable_score
 
 
 def test_stable_score_is_deterministic():

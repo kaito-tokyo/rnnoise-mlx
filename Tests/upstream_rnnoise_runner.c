@@ -1,3 +1,4 @@
+/* Native test runner for upstream RNNoise compatibility. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

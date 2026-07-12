@@ -1,3 +1,5 @@
+"""RNNoise-family MLX training model definitions."""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass

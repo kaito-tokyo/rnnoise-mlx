@@ -1,4 +1,4 @@
-"""Canonical RNNoise weight bundle shared by converters and BNNSGraph export."""
+"""Canonical RNNoise weight bundle shared by conversion and export commands."""
 
 from __future__ import annotations
 

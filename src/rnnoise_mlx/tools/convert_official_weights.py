@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Convert official RNNoise PyTorch weights to/from the canonical bundle."""
 
 from __future__ import annotations
@@ -9,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from rnnoise_weights import read_bundle, write_bundle
+from .rnnoise_weights import read_bundle, write_bundle
 
 
 def import_official(source: Path, output: Path) -> None:

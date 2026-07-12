@@ -1,3 +1,5 @@
+"""Training feature dataset loading."""
+
 from __future__ import annotations
 
 import numpy as np

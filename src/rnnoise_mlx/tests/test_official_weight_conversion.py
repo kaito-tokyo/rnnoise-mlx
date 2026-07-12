@@ -1,20 +1,17 @@
+"""Tests for official RNNoise weight conversion."""
+
 from __future__ import annotations
 
 from pathlib import Path
-import sys
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
-
-from rnnoise_weights import read_bundle, write_bundle
+from rnnoise_mlx.tools.rnnoise_weights import read_bundle, shapes, write_bundle
 
 
 def test_canonical_bundle_supports_official_dimensions(tmp_path: Path):
     cond_size, gru_size = 128, 384
-    from rnnoise_weights import shapes
-
     weights = {
         name: (np.arange(np.prod(shape), dtype=np.float32).reshape(shape) / max(1, np.prod(shape))).astype(np.float32)
         for name, shape in shapes(cond_size, gru_size).items()
@@ -29,14 +26,16 @@ def test_canonical_bundle_supports_official_dimensions(tmp_path: Path):
 
 def test_official_pytorch_roundtrip_preserves_inference(tmp_path: Path):
     torch = pytest.importorskip("torch")
-    upstream = Path(__file__).parents[1] / "data/rnnoise-upstream"
+    upstream = Path(__file__).parents[3] / "data/rnnoise-upstream"
     checkpoint_path = upstream / "models/rnnoise10Ga_12.pth"
     if not checkpoint_path.exists():
         pytest.skip("official validation checkpoint is not prepared")
 
+    import sys
+
     sys.path.insert(0, str(upstream / "torch/rnnoise"))
     from rnnoise import RNNoise
-    from convert_official_weights import export_official, import_official
+    from rnnoise_mlx.tools.convert_official_weights import export_official, import_official
 
     bundle, restored_path = tmp_path / "official.bnns", tmp_path / "restored.pth"
     import_official(checkpoint_path, bundle)
