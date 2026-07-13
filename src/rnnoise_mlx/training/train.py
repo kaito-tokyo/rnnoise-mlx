@@ -15,6 +15,7 @@ import mlx.optimizers as optim
 import numpy as np
 
 from .data import FeatureDataset
+from .checkpoint import load_checkpoint, save_checkpoint
 from .evaluate import evaluate
 from .loss import rnnoise_loss, rnnoise_loss_aligned
 from .model import ModelConfig, RNNoise
@@ -63,12 +64,20 @@ def main():
     parser.add_argument("--mlflow-tracking-uri", required=True)
     parser.add_argument("--mlflow-experiment", required=True)
     parser.add_argument("--mlflow-run-name", required=True)
+    parser.add_argument("--checkpoint-every", type=int, default=32)
+    parser.add_argument(
+        "--resume-from",
+        type=Path,
+        help="complete checkpoint directory to resume from",
+    )
     args = parser.parse_args()
 
     if args.two_segment_tbptt and args.segmented_tbptt_length:
         parser.error("select only one segmented TBPTT interface")
     if (args.two_segment_tbptt or args.segmented_tbptt_length) and args.stateful_tbptt:
         parser.error("segmented TBPTT and --stateful-tbptt are mutually exclusive")
+    if args.checkpoint_every <= 0:
+        parser.error("--checkpoint-every must be positive")
 
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
@@ -82,11 +91,30 @@ def main():
     print(json.dumps({"mlflow_run_id": tracker.run_id}), flush=True)
     dataset = FeatureDataset(args.features, args.sequence_length)
     mx.random.seed(args.seed)
-    rng = np.random.default_rng(args.seed)
     config = ModelConfig()
     model = RNNoise(config)
     learning_rate = lambda step: args.learning_rate / (1 + args.lr_decay * step)
     optimizer = optim.AdamW(learning_rate=learning_rate, betas=(0.8, 0.98), eps=1e-8)
+    history = []
+    update = 0
+    processed_frames = 0
+    resume_epoch = 1
+    resume_batch = 0
+    elapsed_before_resume = 0.0
+    if args.resume_from:
+        restored = load_checkpoint(
+            args.resume_from.resolve(), model, optimizer, config, vars(args)
+        )
+        history = restored["history"]
+        update = int(restored["update"])
+        processed_frames = int(restored["processed_frames"])
+        resume_epoch = int(restored["next_epoch"])
+        resume_batch = int(restored["next_batch"])
+        elapsed_before_resume = float(restored["elapsed_seconds"])
+        print(
+            json.dumps({"resumed_from": str(args.resume_from), "update": update}),
+            flush=True,
+        )
     eval_dataset = FeatureDataset(args.eval_features, args.sequence_length) if args.eval_features else None
     initial_evaluation = evaluate(model, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
     tracker.log_evaluation("initial", initial_evaluation, 0)
@@ -188,13 +216,13 @@ def main():
         next_chunk_step = partial(
             mx.compile, inputs=captured_state, outputs=captured_state
         )(next_chunk_step)
-    history = []
     pending_losses = []
-    update = 0
-    processed_frames = 0
     started = time.monotonic()
 
-    def batches_for_epoch():
+    def batches_for_epoch(epoch: int, skip_batches: int):
+        # A per-epoch stream makes the next batch reproducible even when the
+        # prefetch thread has already advanced its private generator.
+        rng = np.random.default_rng(np.random.SeedSequence([args.seed, epoch]))
         batches = dataset.batches(
             args.batch_size,
             rng,
@@ -202,6 +230,11 @@ def main():
             if args.stateful_tbptt or segment_length
             else args.training_chunk_length,
         )
+        for _ in range(skip_batches):
+            try:
+                next(batches)
+            except StopIteration as error:
+                raise ValueError("checkpoint batch cursor is outside the dataset") from error
         if args.no_prefetch:
             yield from batches
             return
@@ -238,8 +271,11 @@ def main():
                 )
         pending_losses.clear()
 
-    for epoch in range(1, args.epochs + 1):
-        for features, gain, vad in batches_for_epoch():
+    checkpoint_due = False
+    for epoch in range(resume_epoch, args.epochs + 1):
+        first_batch = resume_batch if epoch == resume_epoch else 0
+        batch_index = first_batch
+        for features, gain, vad in batches_for_epoch(epoch, first_batch):
             if segment_length:
                 state = None
                 chunk_ranges = (0,)
@@ -286,9 +322,40 @@ def main():
                 if update % 32 == 0:
                     collect_pending()
                     mx.eval(model.state, optimizer.state)
-                    model.save(str(output / "checkpoint.safetensors"))
-                if args.max_updates is not None and update >= args.max_updates:
+                if update % args.checkpoint_every == 0:
+                    checkpoint_due = True
+                if (
+                    args.max_updates is not None
+                    and update >= args.max_updates
+                    and not args.stateful_tbptt
+                ):
                     break
+            batch_index += 1
+            if checkpoint_due or (
+                args.max_updates is not None and update >= args.max_updates
+            ):
+                collect_pending()
+                mx.eval(model.state, optimizer.state)
+                next_epoch = epoch
+                next_batch = batch_index
+                if next_batch >= dataset.sequence_count // args.batch_size:
+                    next_epoch += 1
+                    next_batch = 0
+                checkpoint = save_checkpoint(
+                    output / "checkpoints",
+                    model,
+                    optimizer,
+                    config,
+                    update=update,
+                    next_epoch=next_epoch,
+                    next_batch=next_batch,
+                    processed_frames=processed_frames,
+                    elapsed_seconds=elapsed_before_resume + time.monotonic() - started,
+                    history=history,
+                    training_config=vars(args),
+                )
+                tracker.log_checkpoint(checkpoint, update)
+                checkpoint_due = False
             if args.max_updates is not None and update >= args.max_updates:
                 break
         if args.max_updates is not None and update >= args.max_updates:
@@ -297,7 +364,7 @@ def main():
     collect_pending()
     mx.eval(model.state, optimizer.state)
 
-    training_elapsed = time.monotonic() - started
+    training_elapsed = elapsed_before_resume + time.monotonic() - started
     model.save(str(output / "model.safetensors"))
     trained_evaluation = evaluate(model, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
     reloaded = RNNoise.load(str(output / "model.safetensors"), config)

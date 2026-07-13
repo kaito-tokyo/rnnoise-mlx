@@ -96,6 +96,13 @@ class MLflowTracker:
             step=update,
         )
 
+    def log_checkpoint(self, checkpoint: Path, update: int) -> None:
+        """Upload every complete checkpoint under an immutable update path."""
+        mlflow.log_artifacts(
+            str(checkpoint), artifact_path=f"checkpoints/{checkpoint.name}"
+        )
+        mlflow.log_metric("checkpoint_uploaded_update", float(update), step=update)
+
     def complete(self, summary: dict[str, Any], output: Path) -> None:
         update = int(summary["updates"])
         self.log_evaluation("trained", summary.get("trained_evaluation"), update)
