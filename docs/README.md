@@ -6,6 +6,8 @@
 - [segment-length-100-250-500-experiment.md](segment-length-100-250-500-experiment.md): current chunk-length and state-carry decision
 - [roadmap.md](roadmap.md): implementation order and acceptance gates
 - [licensing.md](licensing.md): source and model provenance policy
+- [phoible-coverage.md](phoible-coverage.md): source-specific IPA coverage analysis
+- [phoneme-clip-selection.md](phoneme-clip-selection.md): SplitMix64 selection from concatenated speech PCM
 - [../models/format.md](../models/format.md): SafeTensors and deployment tensor contract
 
 ## Historical experiment records

@@ -71,13 +71,27 @@ FFT fix. No upstream neural weights are vendored.
 
 Start with 256 training and 64 evaluation sequences for pipeline validation.
 Each sequence has 2,000 frames and each frame has 98 little-endian float32
-values. The script verifies the exact output size.
+values. First generate deterministic speech-window offsets, then pass them to
+`dump_features`; the script verifies the exact feature output size.
 
 ```sh
+.venv/bin/python -m rnnoise_mlx.tools.select_speech_offsets \
+  data/prepared/train_speech.pcm data/offsets/train.txt \
+  --count 256 --seed 141
+.venv/bin/python -m rnnoise_mlx.tools.select_speech_offsets \
+  data/prepared/eval_speech.pcm data/offsets/eval.txt \
+  --count 64 --seed 142
+
 .venv/bin/python -m rnnoise_mlx.tools.generate_features \
   Vendors/xiph-rnnoise/dump_features data/prepared data/features \
-  --train-count 256 --eval-count 64
+  --train-count 256 --eval-count 64 --speech-offsets data/offsets
 ```
+
+The selector treats each split as one concatenated PCM stream and uses exactly
+one SplitMix64 draw per sequence. Clip boundaries are not special. Preserve the
+offset manifests and their adjacent metadata JSON files with model provenance.
+The deterministic contract covers speech selection only; RNNoise noise/RIR and
+signal augmentation remain downstream random transformations.
 
 Increase the training count to at least 10,000 for model candidates. Upstream
 recommends 200,000 or more, so scale gradually after measuring storage and

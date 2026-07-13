@@ -305,6 +305,7 @@ int main(int argc, char **argv) {
   float b_sig[2] = {0};
   float speech_gain = 1, noise_gain = 1, fgnoise_gain = 1;
   FILE *f1, *f2, *f3, *fout;
+  FILE *speech_offsets = NULL;
   long speech_length, noise_length, fgnoise_length;
   int maxCount;
   unsigned seed;
@@ -312,6 +313,7 @@ int main(int argc, char **argv) {
   DenoiseState *noisy;
   char *argv0;
   char *rir_filename = NULL;
+  char *speech_offsets_filename = NULL;
   struct rir_list rirs;
   seed = getpid();
   srand(seed);
@@ -324,9 +326,17 @@ int main(int argc, char **argv) {
       argv+=2;
       argc-=2;
     }
+    else if (strcmp(argv[1], "-speech_offsets")==0) {
+      speech_offsets_filename = argv[2];
+      argv+=2;
+      argc-=2;
+    }
+    else {
+      break;
+    }
   }
   if (argc!=6) {
-    fprintf(stderr, "usage: %s [-rir_list list] <speech> <noise> <fg_noise> <output> <count>\n", argv0);
+    fprintf(stderr, "usage: %s [-rir_list list] [-speech_offsets offsets] <speech> <noise> <fg_noise> <output> <count>\n", argv0);
     return 1;
   }
   f1 = fopen(argv[1], "rb");
@@ -347,6 +357,13 @@ int main(int argc, char **argv) {
   fseek(f3, 0, SEEK_SET);
 
   maxCount = atoi(argv[5]);
+  if (speech_offsets_filename) {
+    speech_offsets = fopen(speech_offsets_filename, "r");
+    if (speech_offsets==NULL) {
+      fprintf(stderr, "cannot open %s: %s\n", speech_offsets_filename, strerror(errno));
+      return 1;
+    }
+  }
   if (rir_filename) load_rir_list(rir_filename, &rirs);
   for (count=0;count<maxCount;count++) {
     int rir_id;
@@ -364,7 +381,19 @@ int main(int argc, char **argv) {
     float g[NB_BANDS];
     float speech_rms, noise_rms, fgnoise_rms;
     if ((count%1000)==0) fprintf(stderr, "%d\r", count);
-    speech_pos = (rand_lcg(&seed)*2.3283e-10)*speech_length;
+    if (speech_offsets) {
+      long speech_sample_offset;
+      if (fscanf(speech_offsets, "%ld", &speech_sample_offset) != 1) {
+        fprintf(stderr, "speech offset manifest has fewer than %d entries\n", maxCount);
+        return 1;
+      }
+      if (speech_sample_offset < 0 || speech_sample_offset > (speech_length-(long)sizeof(speech16))/2) {
+        fprintf(stderr, "speech sample offset out of range at entry %d: %ld\n", count, speech_sample_offset);
+        return 1;
+      }
+      speech_pos = 2*speech_sample_offset;
+    }
+    else speech_pos = (rand_lcg(&seed)*2.3283e-10)*speech_length;
     noise_pos = (rand_lcg(&seed)*2.3283e-10)*noise_length;
     fgnoise_pos = (rand_lcg(&seed)*2.3283e-10)*fgnoise_length;
     if (speech_pos > speech_length-(long)sizeof(speech16)) speech_pos = speech_length-sizeof(speech16);
