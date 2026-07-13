@@ -1,3 +1,4 @@
+/* Native test runner for the Swift/BNNS implementation. */
 #include "rnnoise_bnns.h"
 
 #include <stdio.h>

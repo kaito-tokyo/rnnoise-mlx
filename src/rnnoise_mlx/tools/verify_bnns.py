@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Compare streaming C/BNNS inference with MLX on held-out feature frames."""
 
 from __future__ import annotations
@@ -11,8 +10,8 @@ import tempfile
 import mlx.core as mx
 import numpy as np
 
-from rnnoise_mlx.data import FeatureDataset
-from rnnoise_mlx.model import ModelConfig, RNNoise
+from rnnoise_mlx.training.data import FeatureDataset
+from rnnoise_mlx.training.model import ModelConfig, RNNoise
 
 
 def main() -> None:

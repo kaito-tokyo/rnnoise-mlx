@@ -60,7 +60,7 @@ the checkpoint's dense float32 weights, so bit-exact PCM is not expected.
 
 ## Reproducing the direct C comparison
 
-Build `training/tests/upstream_rnnoise_runner.c` against the prepared upstream
+Build `Tests/upstream_rnnoise_runner.c` against the prepared upstream
 static library, then pass the resulting executable to
 `verify_official_bnns.py --upstream-runner`. The runner invokes upstream
 `compute_rnn()` directly and writes 32 gains plus one VAD value per frame.

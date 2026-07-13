@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
 """Prepare deterministic RNNoise inputs from LibriTTS-R, MUSAN and RIRS_NOISES."""
 
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
@@ -128,21 +128,33 @@ def ffmpeg_bytes(source: Path, sample_format: str, codec: str) -> bytes:
     return result.stdout
 
 
-def concatenate(manifest: Path, corpus: Path, output: Path, limit: int | None = None) -> None:
+def concatenate(
+    manifest: Path,
+    corpus: Path,
+    output: Path,
+    limit: int | None = None,
+    workers: int = 1,
+) -> None:
     paths = load_manifest(manifest, corpus, limit)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as destination:
-        for index, source in enumerate(paths, 1):
-            destination.write(ffmpeg_bytes(source, "s16le", "pcm_s16le"))
-            if "speech" in manifest.stem:
-                destination.write(bytes(9600))  # 100 ms at 48 kHz, mono s16le
-            if index % 100 == 0:
-                print(f"{manifest.stem}: {index}/{len(paths)}", file=sys.stderr)
+        convert = lambda source: ffmpeg_bytes(source, "s16le", "pcm_s16le")
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ffmpeg") as executor:
+            # executor.map yields in input order, preserving byte-for-byte determinism.
+            converted = executor.map(convert, paths)
+            for index, audio in enumerate(converted, 1):
+                destination.write(audio)
+                if "speech" in manifest.stem:
+                    destination.write(bytes(9600))  # 100 ms at 48 kHz, mono s16le
+                if index % 100 == 0:
+                    print(f"{manifest.stem}: {index}/{len(paths)}", file=sys.stderr)
 
 
 def render_command(args: argparse.Namespace) -> None:
     if shutil.which("ffmpeg") is None:
         raise SystemExit("ffmpeg is required")
+    if args.workers < 1:
+        raise SystemExit("workers must be at least 1")
     corpus = args.corpus.resolve()
     manifests = args.manifests.resolve()
     output = args.output.resolve()
@@ -150,9 +162,9 @@ def render_command(args: argparse.Namespace) -> None:
         speech_limit = args.speech_limit if args.speech_limit is not None else args.limit
         noise_limit = args.noise_limit if args.noise_limit is not None else args.limit
         rir_limit = args.rir_limit if args.rir_limit is not None else args.limit
-        concatenate(manifests / f"{split}_speech.txt", corpus, output / f"{split}_speech.pcm", speech_limit)
-        concatenate(manifests / f"{split}_background.txt", corpus, output / f"{split}_background.pcm", noise_limit)
-        concatenate(manifests / f"{split}_foreground.txt", corpus, output / f"{split}_foreground.pcm", noise_limit)
+        concatenate(manifests / f"{split}_speech.txt", corpus, output / f"{split}_speech.pcm", speech_limit, args.workers)
+        concatenate(manifests / f"{split}_background.txt", corpus, output / f"{split}_background.pcm", noise_limit, args.workers)
+        concatenate(manifests / f"{split}_foreground.txt", corpus, output / f"{split}_foreground.pcm", noise_limit, args.workers)
 
         rir_dir = output / f"{split}_rirs"
         rir_dir.mkdir(parents=True, exist_ok=True)
@@ -185,6 +197,7 @@ def parser() -> argparse.ArgumentParser:
     render.add_argument("--speech-limit", type=int, help="maximum speech files per split")
     render.add_argument("--noise-limit", type=int, help="maximum background/foreground files per split")
     render.add_argument("--rir-limit", type=int, help="maximum RIR files per split")
+    render.add_argument("--workers", type=int, default=8, help="parallel FFmpeg processes (default: 8)")
     render.set_defaults(func=render_command)
     return result
 

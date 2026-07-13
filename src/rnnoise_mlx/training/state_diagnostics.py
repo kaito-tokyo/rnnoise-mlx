@@ -1,3 +1,5 @@
+"""Training diagnostics for recurrent model state handling."""
+
 from __future__ import annotations
 
 import argparse

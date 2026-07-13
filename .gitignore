@@ -5,7 +5,8 @@ __pycache__/
 .pytest_cache/
 runs/
 experiments/
-training/data/
+data/
+Vendors/xiph-rnnoise/dump_features
 .build/
 DerivedData/
 .DS_Store

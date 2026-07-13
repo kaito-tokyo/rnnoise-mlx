@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+"""Compare segmented inference modes against full-sequence inference."""
 from __future__ import annotations
 
 import argparse
@@ -8,9 +8,9 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
-from rnnoise_mlx.data import FeatureDataset
-from rnnoise_mlx.loss import rnnoise_loss
-from rnnoise_mlx.model import ModelConfig, RNNoise
+from rnnoise_mlx.training.data import FeatureDataset
+from rnnoise_mlx.training.loss import rnnoise_loss
+from rnnoise_mlx.training.model import ModelConfig, RNNoise
 
 
 def sequence_losses(model: RNNoise, dataset: FeatureDataset, gamma: float) -> np.ndarray:

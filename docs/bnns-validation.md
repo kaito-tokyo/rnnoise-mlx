@@ -8,7 +8,7 @@ convolution and recurrent state across calls.
 
 ## MLX numerical parity
 
-`training/scripts/verify_bnns.py` compared 100 held-out frames with MLX after
+`python -m rnnoise_mlx.tools.verify_bnns` compared 100 held-out frames with MLX after
 discarding the four-frame convolution warm-up.
 
 ```text

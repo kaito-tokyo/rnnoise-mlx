@@ -19,7 +19,7 @@ let package = Package(
         ),
         .target(
             name: "RNNoiseDSP",
-            path: "training/vendor/xiph-rnnoise",
+            path: "Vendors/xiph-rnnoise",
             sources: [
                 "src/denoise.c", "src/pitch.c", "src/celt_lpc.c", "src/kiss_fft.c",
                 "src/parse_lpcnet_weights.c", "src/rnnoise_tables.c", "src/training_globals.c",
@@ -45,7 +45,7 @@ let package = Package(
         .executableTarget(
             name: "RNNoiseBNNSRunner",
             dependencies: ["RNNoiseBNNS"],
-            path: "training/tests",
+            path: "Tests",
             sources: ["bnns_runner.c"]
         ),
     ]

@@ -12,7 +12,7 @@ sets: 256 training sequences, batch 8, ten epochs, and 320 updates.
 - RIR: Xiph `measured_rirs-v2`
 
 LibriTTS-R is CC BY 4.0. Downloads, PCM, features, and weights are not tracked.
-`training/scripts/prepare_libritts_raw.sh` converts clips to 48 kHz mono s16le, inserts
+`python -m rnnoise_mlx.tools.prepare_libritts_raw` converts clips to 48 kHz mono s16le, inserts
 100 ms of silence, and records the selection in `.clips.txt`.
 
 For the reproducible LibriTTS-R, MUSAN, and RIRS_NOISES base-model workflow,
@@ -22,7 +22,7 @@ The vendored `dump_features` includes the `fstride[MAXFACTORS + 1]` fix required
 for the 65536-point RIR FFT and moves large RIR work buffers to the heap.
 
 ```sh
-training/scripts/build_dump_features.sh
+.venv/bin/python -m rnnoise_mlx.tools.build_dump_features
 ```
 
 Each frame contains 98 float32 values: 65 features, 32 gains, and one VAD
@@ -32,11 +32,13 @@ training and 50,176,000 bytes for evaluation.
 ## Run
 
 ```sh
-rnnoise-mlx-train training/data/features/train.f32 runs/test-training \
-  --eval-features training/data/features/eval.f32 \
+.venv/bin/python -m rnnoise_mlx.training.train data/features/train.f32 runs/test-training \
+  --eval-features data/features/eval.f32 \
   --batch-size 8 --sequence-length 2000 \
   --segmented-tbptt-length 100 --segmented-tbptt-state carry \
-  --epochs 10 --max-updates 320
+  --epochs 10 --max-updates 320 \
+  --mlflow-tracking-uri "$MLFLOW_TRACKING_URI" \
+  --mlflow-experiment "$MLFLOW_EXPERIMENT" --mlflow-run-name test-training
 ```
 
 `training.json` records initial, trained, and reloaded losses; finiteness;
