@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 
 import mlx.core as mx
@@ -12,10 +12,10 @@ import mlx.utils as mlx_utils
 
 @dataclass(frozen=True)
 class ModelConfig:
-    input_dim: int = 65
-    output_dim: int = 32
-    cond_size: int = 128
-    gru_size: int = 256
+    input_dim: int = field(default=65, init=False)
+    output_dim: int = field(default=32, init=False)
+    cond_size: int = field(default=128, init=False)
+    gru_size: int = field(default=384, init=False)
 
 
 class GRU(nn.GRU):
