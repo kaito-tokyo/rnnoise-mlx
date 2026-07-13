@@ -4,6 +4,7 @@
 
 - [test-training.md](test-training.md): data preparation and 320-update MLX smoke training
 - [segment-length-100-250-500-experiment.md](segment-length-100-250-500-experiment.md): current chunk-length and state-carry decision
+- [reusable-segmented-graphs.md](reusable-segmented-graphs.md): reusable chunk graphs, numerical validation, and Metal benchmark
 - [roadmap.md](roadmap.md): implementation order and acceptance gates
 - [licensing.md](licensing.md): source and model provenance policy
 - [phoible-coverage.md](phoible-coverage.md): source-specific IPA coverage analysis

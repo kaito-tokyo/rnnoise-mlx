@@ -27,10 +27,15 @@ sequences excluded zero. Length 100 was about 2.27 times faster, so it remains
 the development default. See
 [the experiment](segment-length-100-250-500-experiment.md).
 
-The next speed experiment should reuse a compiled 500-frame graph four times,
-accumulate gradients on device, and update once. The monolithic graph reached
-96% GPU use and about 25 GB of allocated GPU memory on an M2 Pro, so this should
-first be validated with a short A/B benchmark.
+Compiled first/next-chunk graph reuse and on-device gradient accumulation are
+implemented and numerically match the former monolithic objective. Synthetic
+length-100 measurements reduced peak memory to about 1.01 GB at batch 8 and
+1.47 GB at batch 16. Length 500 used about 11.35 GB, compared with roughly
+25 GB observed for the monolithic graph, while retaining nearly the same
+batch-8 throughput. Length 100 at batch 16 reached about 1.33 times the
+historical batch-8 throughput. See
+[the reusable-graph result](reusable-segmented-graphs.md).
 
 Mixed precision is deferred because it may be counterproductive for this small
-model. Metal profiling and an MLX fused-GRU primitive are later candidates.
+model. Metal profiling and a fused-GRU or scan primitive inside each reusable
+chunk graph are the next candidates.

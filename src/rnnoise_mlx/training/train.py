@@ -19,6 +19,7 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .evaluate import evaluate
 from .loss import rnnoise_loss, rnnoise_loss_aligned
 from .model import ModelConfig, RNNoise
+from .segmented import make_segmented_step
 from .tracking import MLflowTracker
 
 
@@ -140,49 +141,22 @@ def main():
     ):
         parser.error("segmented TBPTT length must be >4 and divide --sequence-length")
 
-    def segmented_objective(model, features, gain, vad):
-        weighted_loss = 0
-        target_frames = 0
-        state = None
-        for start in range(0, args.sequence_length, segment_length):
-            end = start + segment_length
-            chunk = features[:, start:end, :]
-            if start == 0 or segment_state == "reset":
-                pred_gain, pred_vad, state = model.first_chunk(chunk)
-                target_gain = gain[:, start + 3 : end - 1, :]
-                target_vad = vad[:, start + 3 : end - 1, :]
-            else:
-                state = tuple(mx.stop_gradient(value) for value in state)
-                pred_gain, pred_vad, state = model.next_chunk(chunk, state)
-                if equalize_reset_targets:
-                    pred_gain = pred_gain[:, 4:, :]
-                    pred_vad = pred_vad[:, 4:, :]
-                    target_gain = gain[:, start + 3 : end - 1, :]
-                    target_vad = vad[:, start + 3 : end - 1, :]
-                else:
-                    target_gain = gain[:, start - 1 : end - 1, :]
-                    target_vad = vad[:, start - 1 : end - 1, :]
-            loss = rnnoise_loss_aligned(
-                pred_gain, pred_vad, target_gain, target_vad, args.gamma
-            )[0]
-            frames = pred_gain.shape[-2]
-            weighted_loss = weighted_loss + frames * loss
-            target_frames += frames
-        return weighted_loss / target_frames
-
-    segmented_value_and_grad = nn.value_and_grad(model, segmented_objective)
-
-    def segmented_step(features, gain, vad):
-        loss, gradients = segmented_value_and_grad(model, features, gain, vad)
-        optimizer.update(model, gradients)
-        return loss
+    segmented_step = None
+    if segment_length:
+        segmented_step = make_segmented_step(
+            model,
+            optimizer,
+            sequence_length=args.sequence_length,
+            segment_length=segment_length,
+            segment_state=segment_state,
+            equalize_reset_targets=equalize_reset_targets,
+            gamma=args.gamma,
+            compile=not args.no_compile,
+        )
 
     if not args.no_compile:
         captured_state = [model.state, optimizer.state]
         train_step = partial(mx.compile, inputs=captured_state, outputs=captured_state)(train_step)
-        segmented_step = partial(
-            mx.compile, inputs=captured_state, outputs=captured_state
-        )(segmented_step)
 
     def stateful_objective(params, features, gain, vad, state, first):
         model.update(params)
