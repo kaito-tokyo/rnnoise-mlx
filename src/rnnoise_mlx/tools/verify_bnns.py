@@ -27,7 +27,17 @@ def main() -> None:
     source = FeatureDataset(str(args.features), 2000)
     values = np.asarray(source.data[0, : args.frames, :65], dtype="<f4")
     model = RNNoise.load(str(args.checkpoint), ModelConfig())
-    gains, vad, _ = model(mx.array(values[None]))
+    # Match upstream C inference by initializing the two convolution histories
+    # independently. Padding input features is not equivalent because conv1's
+    # bias would make the synthetic conv2 history nonzero.
+    state = (
+        mx.zeros((1, 2, 65)),
+        mx.zeros((1, 2, 128)),
+        mx.zeros((1, 384)),
+        mx.zeros((1, 384)),
+        mx.zeros((1, 384)),
+    )
+    gains, vad, _ = model.next_chunk(mx.array(values[None]), state)
     mx.eval(gains, vad)
     reference = np.concatenate((np.asarray(gains[0]), np.asarray(vad[0])), axis=-1)
 
@@ -39,7 +49,7 @@ def main() -> None:
             [str(args.runner), str(args.graph), str(input_path), str(args.frames), str(output_path)],
             check=True,
         )
-        output = np.fromfile(output_path, dtype="<f4").reshape(args.frames, 33)[4:]
+        output = np.fromfile(output_path, dtype="<f4").reshape(args.frames, 33)
 
     difference = np.abs(output - reference)
     maximum = float(difference.max())

@@ -19,11 +19,14 @@ def generate(
     count: int,
     speech_offsets: Path | None = None,
     progress_interval: float = 10.0,
+    disable_foreground: bool = False,
 ) -> None:
     destination = output / f"{split}.f32"
     options = []
     if speech_offsets is not None:
         options = ["-speech_offsets", str(speech_offsets)]
+    if disable_foreground:
+        options.append("-disable_foreground")
     command = [
         str(dump_features),
         "-rir_list",
@@ -88,6 +91,14 @@ def main() -> None:
         type=Path,
         help="directory containing train.txt and eval.txt sample-offset manifests",
     )
+    parser.add_argument(
+        "--disable-foreground",
+        action="store_true",
+        help=(
+            "disable foreground-speech augmentation while preserving background-noise "
+            "and RIR augmentation; intended for conservative corpus-cleaner training"
+        ),
+    )
     args = parser.parse_args()
     if args.progress_interval <= 0:
         parser.error("--progress-interval must be positive")
@@ -103,11 +114,13 @@ def main() -> None:
         dump_features, prepared, output, "train", args.train_count,
         offsets / "train.txt" if offsets else None,
         args.progress_interval,
+        args.disable_foreground,
     )
     generate(
         dump_features, prepared, output, "eval", args.eval_count,
         offsets / "eval.txt" if offsets else None,
         args.progress_interval,
+        args.disable_foreground,
     )
 
 
