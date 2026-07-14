@@ -3,7 +3,9 @@ from pathlib import Path
 
 from rnnoise_mlx.tools.prepare_speech_mix import (
     exact_targets,
+    render_split,
     stable_audio_paths,
+    write_audio_directory,
     write_pcm_prefix,
 )
 
@@ -38,3 +40,57 @@ def test_write_pcm_prefix_takes_exact_samples(tmp_path: Path):
     assert samples == 4
     assert output.getvalue() == bytes(range(8))
     assert used == [str(source.resolve())]
+
+
+def test_render_split_uses_split_specific_weights(tmp_path: Path):
+    first = tmp_path / "first.pcm"
+    second = tmp_path / "second.pcm"
+    first.write_bytes(b"\x01\x00" * 10)
+    second.write_bytes(b"\x02\x00" * 10)
+    specification = {
+        "train_hours": 4 / 48_000 / 3600,
+        "eval_hours": 4 / 48_000 / 3600,
+        "sources": [
+            {
+                "name": "first",
+                "train": str(first),
+                "eval": str(first),
+                "train_weight": 1,
+                "eval_weight": 0,
+                "type": "pcm-s16le-48k-mono",
+            },
+            {
+                "name": "second",
+                "train": str(second),
+                "eval": str(second),
+                "train_weight": 1,
+                "eval_weight": 1,
+                "type": "pcm-s16le-48k-mono",
+            },
+        ],
+    }
+    train = tmp_path / "train.pcm"
+    evaluation = tmp_path / "eval.pcm"
+    render_split(specification, "train", train)
+    render_split(specification, "eval", evaluation)
+    assert train.read_bytes() == b"\x01\x00" * 2 + b"\x02\x00" * 2
+    assert evaluation.read_bytes() == b"\x02\x00" * 4
+
+
+def test_write_audio_directory_repeats_only_when_enabled(tmp_path: Path, monkeypatch):
+    source = tmp_path / "audio"
+    source.mkdir()
+    clip = source / "clip.wav"
+    clip.write_bytes(b"placeholder")
+    monkeypatch.setattr("rnnoise_mlx.tools.prepare_speech_mix.decode",
+                        lambda path: b"\x01\x00" * 3)
+    output = io.BytesIO()
+    written, used, reuse = write_audio_directory(
+        output, source, 8, "train:jpn", repeat_to_target=True
+    )
+    assert written == 8
+    assert output.getvalue() == b"\x01\x00" * 8
+    assert used == [str(clip.resolve())] * 3
+    assert reuse["passes"] == 3
+    assert reuse["file_use_counts"] == {str(clip.resolve()): 3}
+    assert reuse["final_file_samples"] == 2
