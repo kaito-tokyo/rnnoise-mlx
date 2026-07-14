@@ -1,0 +1,148 @@
+# CJK two-stage training pipeline
+
+The first model is a conservative corpus cleaner trained only from clean CJK
+speech. It cleans selected Common Voice Japanese clips. The second model is the
+distributable denoiser trained from a frozen speech-mixture specification that
+points at those cleaned clips. The two models never share feature files.
+
+## Frozen decisions
+
+- Cleaner speech: Kokoro 20%, AISHELL-3 40%, Zeroth Korean 40%.
+- Cleaner training: 2,000-frame sequences, carry-state TBPTT 250, 10,000 updates.
+- Cleaner augmentation: background noise and RIR enabled; foreground speech disabled.
+- Speech offsets: SplitMix64, seed 141 for train and 142 for evaluation.
+- Common Voice cleaning is file-preserving and resumable, with input, output,
+  and compiled-model hashes recorded.
+- AISHELL-3 and Zeroth Korean remain original speech in stage two.
+
+The final stage-two proportions are supplied as a JSON specification. Changing
+them creates a different experiment and must not reuse old feature files.
+
+## Persistent experiment checkout
+
+Long jobs run from a purpose-named checkout under `~/Worktrees`, not a
+Codex-managed worktree. The commands below assume `ROOT` is that checkout.
+
+```sh
+ROOT=/Users/umireon/Worktrees/rnnoise-mlx-cjk-cleaner-20260714
+BASE_PREPARED=/Users/umireon/Worktrees/rnnoise-mlx-base-10k-20260712-rerun2/data/prepared
+DATASET=/Users/umireon/Datasets/rnnoise-mlx-multilingual-corpus-20260713
+
+cd "$ROOT"
+python -m rnnoise_mlx.tools.build_dump_features
+swift build -c release --product rnnoise-mlx-denoise
+```
+
+Copy `configs/cjk-cleaner.example.json` into the experiment directory and
+replace its Kokoro paths with the actual deterministic train/evaluation split.
+
+## Stage 1: CJK cleaner
+
+Build exact CJK PCM and link the unchanged augmentation population:
+
+```sh
+python -m rnnoise_mlx.tools.prepare_speech_mix \
+  cjk-cleaner-mix.json data/cjk-cleaner/prepared \
+  --augmentation-prepared "$BASE_PREPARED"
+
+python -m rnnoise_mlx.tools.select_speech_offsets \
+  data/cjk-cleaner/prepared/train_speech.pcm data/cjk-cleaner/offsets/train.txt \
+  --count 10000 --seed 141
+python -m rnnoise_mlx.tools.select_speech_offsets \
+  data/cjk-cleaner/prepared/eval_speech.pcm data/cjk-cleaner/offsets/eval.txt \
+  --count 500 --seed 142
+
+python -m rnnoise_mlx.tools.generate_features \
+  Vendors/xiph-rnnoise/dump_features data/cjk-cleaner/prepared \
+  data/cjk-cleaner/features --train-count 10000 --eval-count 500 \
+  --speech-offsets data/cjk-cleaner/offsets --disable-foreground
+```
+
+Train with immutable 1,000-update generations:
+
+```sh
+python -m rnnoise_mlx.training.train \
+  data/cjk-cleaner/features/train.f32 runs/cjk-cleaner-10k \
+  --eval-features data/cjk-cleaner/features/eval.f32 \
+  --batch-size 8 --sequence-length 2000 \
+  --segmented-tbptt-length 250 --segmented-tbptt-state carry \
+  --max-updates 10000 --checkpoint-every 1000 --seed 141 \
+  --mlflow-tracking-uri "$MLFLOW_TRACKING_URI" \
+  --mlflow-experiment "$MLFLOW_EXPERIMENT" \
+  --mlflow-run-name cjk-cleaner-tbptt250-10k
+```
+
+Export the checkpoint selected by comparing the 5k, 8k, and 10k listening
+outputs. The final model path below is therefore selected, not assumed best.
+
+```sh
+python -m rnnoise_mlx.tools.export_bnns_bundle \
+  runs/cjk-cleaner-10k/model.safetensors runs/cjk-cleaner-10k/model.bnns
+python -m rnnoise_mlx.tools.export_bnns_graph \
+  runs/cjk-cleaner-10k/model.bnns runs/cjk-cleaner-10k/RNNoiseGraph.mlpackage
+xcrun coremlcompiler compile runs/cjk-cleaner-10k/RNNoiseGraph.mlpackage \
+  runs/cjk-cleaner-10k --platform macOS --deployment-target 15.0
+```
+
+Clean only selected Common Voice Japanese splits. Interrupted runs reuse
+complete WAV files and remove incomplete output files.
+
+```sh
+python -m rnnoise_mlx.tools.clean_audio_corpus \
+  "$DATASET/prepared/cv26-ja-selection/train" data/cv26-ja-clean/train \
+  --executable .build/release/rnnoise-mlx-denoise \
+  --model runs/cjk-cleaner-10k/RNNoiseGraph.mlmodelc --workers 4 --resume
+
+python -m rnnoise_mlx.tools.clean_audio_corpus \
+  "$DATASET/prepared/cv26-ja-selection/eval" data/cv26-ja-clean/eval \
+  --executable .build/release/rnnoise-mlx-denoise \
+  --model runs/cjk-cleaner-10k/RNNoiseGraph.mlmodelc --workers 4 --resume
+```
+
+Do not proceed automatically. Compare original and cleaned fixed Japanese
+clips, especially unvoiced vowels, `/ɕ/`, geminates, moraic nasals, and word
+edges. A cleaner that suppresses more noise but changes these sounds fails.
+
+## Stage 2: distributable model
+
+Create `final-base-mix.json` with the final agreed populations. Japanese Common
+Voice entries point to `data/cv26-ja-clean/train` and `eval`; AISHELL-3 and
+Zeroth Korean point to their original prepared sources. Other retained
+populations, including the agreed 20 hours of English, are explicit entries.
+
+```sh
+python -m rnnoise_mlx.tools.prepare_speech_mix \
+  final-base-mix.json data/final-base/prepared \
+  --augmentation-prepared "$BASE_PREPARED"
+```
+
+Generate new offsets and features. Do not use `--disable-foreground` here
+unless a separate final-model experiment intentionally tests that change; the
+default preserves upstream's approximately one-in-eight foreground mixing.
+
+```sh
+python -m rnnoise_mlx.tools.select_speech_offsets \
+  data/final-base/prepared/train_speech.pcm data/final-base/offsets/train.txt \
+  --count 20000 --seed 141
+python -m rnnoise_mlx.tools.select_speech_offsets \
+  data/final-base/prepared/eval_speech.pcm data/final-base/offsets/eval.txt \
+  --count 500 --seed 142
+python -m rnnoise_mlx.tools.generate_features \
+  Vendors/xiph-rnnoise/dump_features data/final-base/prepared \
+  data/final-base/features --train-count 20000 --eval-count 500 \
+  --speech-offsets data/final-base/offsets
+```
+
+Stage two uses a new output directory and MLflow run. Its update count remains
+a separate model-quality decision. Upload its final mix specification, both
+cleaning manifests, and all immutable training checkpoints.
+
+## Required artifacts
+
+- both mix specifications and `speech-mix-manifest.json` files;
+- four SplitMix64 offset files and metadata JSON files;
+- cleaner feature command showing `--disable-foreground`;
+- cleaner 5k, 8k, and 10k checkpoints and listening outputs;
+- compiled cleaner hashes and both Common Voice cleaning manifests;
+- original-versus-cleaned listening decision;
+- stage-two training metadata, checkpoints, and final listening pack.

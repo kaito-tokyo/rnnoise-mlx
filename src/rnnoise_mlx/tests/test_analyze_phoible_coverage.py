@@ -16,11 +16,13 @@ def fixture_cldf(root):
     write_csv(root / "languages.csv", [
         {"ID": "base", "Name": "Base", "ISO639P3code": "bas", "Glottocode": "base1234"},
         {"ID": "cand", "Name": "Candidate", "ISO639P3code": "can", "Glottocode": "cand1234"},
+        {"ID": "alt", "Name": "Alternative", "ISO639P3code": "alt", "Glottocode": "alte1234"},
     ])
     write_csv(root / "contributions.csv", [
         {"ID": "1", "Name": "Base A", "Contributor_ID": "A", "Source": "a", "URL": "u"},
         {"ID": "2", "Name": "Base B", "Contributor_ID": "B", "Source": "b", "URL": "v"},
         {"ID": "3", "Name": "Candidate", "Contributor_ID": "C", "Source": "c", "URL": "w"},
+        {"ID": "4", "Name": "Alternative", "Contributor_ID": "D", "Source": "d", "URL": "x"},
     ])
     write_csv(root / "parameters.csv", [
         {"ID": "s", "SegmentClass": "consonant"},
@@ -44,6 +46,11 @@ def fixture_cldf(root):
         {"Language_ID": "cand", "Contribution_ID": "3", "Parameter_ID": "asp", "Value": "sʰ"},
         {"Language_ID": "cand", "Contribution_ID": "3", "Parameter_ID": "tone", "Value": "˩"},
         {"Language_ID": "cand", "Contribution_ID": "3", "Parameter_ID": "tone", "Value": "˥"},
+        {"Language_ID": "alt", "Contribution_ID": "4", "Parameter_ID": "sh", "Value": "ɕ"},
+        {"Language_ID": "alt", "Contribution_ID": "4", "Parameter_ID": "longs", "Value": "sː"},
+        {"Language_ID": "alt", "Contribution_ID": "4", "Parameter_ID": "asp", "Value": "sʰ"},
+        {"Language_ID": "alt", "Contribution_ID": "4", "Parameter_ID": "vowel", "Value": "i"},
+        {"Language_ID": "alt", "Contribution_ID": "4", "Parameter_ID": "tone", "Value": "˩"},
     ])
 
 
@@ -116,3 +123,36 @@ def test_result_is_deterministic_and_scenario_math_matches_candidate(tmp_path):
     candidate = first["candidates"][0]
     step = first["cumulative_scenarios"][0]["steps"][0]
     assert step["new_at_step"] == candidate["definitely_novel"]
+
+
+def test_scenario_summary_and_literal_superset_alternatives(tmp_path):
+    fixture_cldf(tmp_path)
+    config = selection()
+    config["cumulative_scenarios"].append(
+        {"label": "superset", "inventory_ids": ["4"]}
+    )
+    result = analyze(tmp_path, config)
+    selected, superset = result["cumulative_scenarios"]
+
+    assert result["schema_version"] == 2
+    assert selected["addition_counts"] == {"consonant": 3, "vowel": 0, "tone": 1}
+    assert superset["addition_counts"] == {"consonant": 3, "vowel": 1, "tone": 1}
+    assert selected["strictly_dominated_by"] == ["superset"]
+    assert superset["strictly_dominated_by"] == []
+    alternatives = selected["steps"][0]["covering_alternatives"]
+    assert [item["inventory_id"] for item in alternatives] == ["4"]
+    assert alternatives[0]["sources"] == ["d"]
+    assert alternatives[0]["url"] == "x"
+    assert alternatives[0]["additional_beyond_selected"] == {
+        "consonant": [], "vowel": ["i"], "tone": []
+    }
+
+
+def test_alternative_requires_every_segment_without_similarity_folding(tmp_path):
+    fixture_cldf(tmp_path)
+    result = analyze(tmp_path, selection())
+    alternatives = result["cumulative_scenarios"][0]["steps"][0][
+        "covering_alternatives"
+    ]
+    assert alternatives[0]["new_at_step"]["consonant"] == ["sʰ", "sː", "ɕ"]
+    assert "θ" not in alternatives[0]["new_at_step"]["consonant"]

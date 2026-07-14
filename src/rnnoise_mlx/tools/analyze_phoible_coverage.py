@@ -76,6 +76,21 @@ def intersect_classes(left, right) -> dict[str, set[str]]:
     return {name: set(left[name]) & set(right[name]) for name in SEGMENT_CLASSES}
 
 
+def includes_classes(left, right) -> bool:
+    """Return whether every literal segment in right is present in left."""
+    return all(set(right[name]) <= set(left[name]) for name in SEGMENT_CLASSES)
+
+
+def strictly_includes_classes(left, right) -> bool:
+    return includes_classes(left, right) and any(
+        set(left[name]) != set(right[name]) for name in SEGMENT_CLASSES
+    )
+
+
+def class_counts(classes) -> dict[str, int]:
+    return {name: len(classes[name]) for name in SEGMENT_CLASSES}
+
+
 def inventory_record(inventory_id: str, data: dict) -> dict:
     if inventory_id not in data["contributions"] or inventory_id not in data["segments"]:
         raise ValueError(f"unknown or empty PHOIBLE inventory ID: {inventory_id}")
@@ -164,27 +179,74 @@ def analyze(cldf: Path, selection: dict) -> dict:
     for scenario in selection.get("cumulative_scenarios", []):
         covered = {name: set(possible[name]) for name in SEGMENT_CLASSES}
         steps = []
-        for inventory_id in map(str, scenario["inventory_ids"]):
+        inventory_ids = list(map(str, scenario["inventory_ids"]))
+        for inventory_id in inventory_ids:
             record = inventory_record(inventory_id, data)
             added = subtract_classes(record["segments"], covered)
+            alternatives = []
+            if any(added[name] for name in SEGMENT_CLASSES):
+                for alternative_id in sorted(data["segments"], key=int):
+                    if (
+                        alternative_id in inventory_ids
+                        or alternative_id in excluded_inventory_ids
+                    ):
+                        continue
+                    alternative = inventory_record(alternative_id, data)
+                    if alternative["iso639_3"] in excluded_iso:
+                        continue
+                    alternative_added = subtract_classes(
+                        alternative["segments"], covered
+                    )
+                    if includes_classes(alternative_added, added):
+                        alternatives.append({
+                            "inventory_id": alternative["inventory_id"],
+                            "inventory_name": alternative["inventory_name"],
+                            "language_name": alternative["language_name"],
+                            "iso639_3": alternative["iso639_3"],
+                            "glottocode": alternative["glottocode"],
+                            "source_collection": alternative["source_collection"],
+                            "sources": alternative["sources"],
+                            "url": alternative["url"],
+                            "new_at_step": sorted_classes(alternative_added),
+                            "additional_beyond_selected": sorted_classes(
+                                subtract_classes(alternative_added, added)
+                            ),
+                        })
             for name in SEGMENT_CLASSES:
                 covered[name].update(record["segments"][name])
             steps.append({
                 "inventory": record,
                 "new_at_step": sorted_classes(added),
-                "covered_counts": {name: len(covered[name]) for name in SEGMENT_CLASSES},
+                "new_at_step_counts": class_counts(added),
+                "covered_counts": class_counts(covered),
+                "covering_alternatives": alternatives,
             })
+        additions = subtract_classes(covered, possible)
+        remaining = subtract_classes(phoible_universe, covered)
         cumulative.append({
             "label": scenario["label"],
+            "inventory_ids": inventory_ids,
             "steps": steps,
-            "remaining_phoible_segments": sorted_classes(
-                subtract_classes(phoible_universe, covered)
-            ),
+            "additions_beyond_baseline_possible": sorted_classes(additions),
+            "addition_counts": class_counts(additions),
+            "remaining_phoible_segments": sorted_classes(remaining),
+            "remaining_counts": class_counts(remaining),
         })
+
+    for scenario in cumulative:
+        additions = scenario["additions_beyond_baseline_possible"]
+        scenario["strictly_dominated_by"] = [
+            other["label"]
+            for other in cumulative
+            if other is not scenario
+            and strictly_includes_classes(
+                other["additions_beyond_baseline_possible"], additions
+            )
+        ]
 
     canonical = json.dumps(selection, ensure_ascii=False, sort_keys=True).encode()
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "selection_sha256": hashlib.sha256(canonical).hexdigest(),
         "baseline": baseline,
         "baseline_definite": sorted_classes(definite),

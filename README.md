@@ -58,8 +58,8 @@ frames.
   --mlflow-run-name promoted-500
 ```
 
-See [the segment-length experiment](docs/segment-length-100-250-500-experiment.md)
-and [the reproducible test-training procedure](docs/test-training.md).
+The current corpus-cleaning and promoted-training parameters are documented in
+[the CJK two-stage procedure](docs/cjk-two-stage-training.md).
 
 The training command requires an MLflow tracking URI, experiment, and run name.
 It checks the server before evaluation or optimization, logs loss every ten

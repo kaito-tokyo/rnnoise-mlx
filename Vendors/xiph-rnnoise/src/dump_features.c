@@ -306,6 +306,7 @@ int main(int argc, char **argv) {
   float speech_gain = 1, noise_gain = 1, fgnoise_gain = 1;
   FILE *f1, *f2, *f3, *fout;
   FILE *speech_offsets = NULL;
+  int disable_foreground = 0;
   long speech_length, noise_length, fgnoise_length;
   int maxCount;
   unsigned seed;
@@ -331,12 +332,17 @@ int main(int argc, char **argv) {
       argv+=2;
       argc-=2;
     }
+    else if (strcmp(argv[1], "-disable_foreground")==0) {
+      disable_foreground = 1;
+      argv++;
+      argc--;
+    }
     else {
       break;
     }
   }
   if (argc!=6) {
-    fprintf(stderr, "usage: %s [-rir_list list] [-speech_offsets offsets] <speech> <noise> <fg_noise> <output> <count>\n", argv0);
+    fprintf(stderr, "usage: %s [-rir_list list] [-speech_offsets offsets] [-disable_foreground] <speech> <noise> <fg_noise> <output> <count>\n", argv0);
     return 1;
   }
   f1 = fopen(argv[1], "rb");
@@ -417,6 +423,7 @@ int main(int argc, char **argv) {
     fgnoise_gain = pow(10., (-30+randf(40.f)+randf(15.f))/20.);
     if (rand()%8==0) noise_gain = 0;
     if (rand()%8!=0) fgnoise_gain = 0;
+    if (disable_foreground) fgnoise_gain = 0;
     if (rand()%12==0) {
       noise_gain *= 0.03;
       fgnoise_gain *= 0.03;

@@ -2,22 +2,10 @@
 
 ## Current workflow
 
-- [test-training.md](test-training.md): data preparation and 320-update MLX smoke training
-- [segment-length-100-250-500-experiment.md](segment-length-100-250-500-experiment.md): current chunk-length and state-carry decision
-- [roadmap.md](roadmap.md): implementation order and acceptance gates
+- [cjk-two-stage-training.md](cjk-two-stage-training.md): clean-CJK corpus cleaner followed by cleaned-Common-Voice base training
+- [base-model-preparation.md](base-model-preparation.md): deterministic base-data preparation
 - [licensing.md](licensing.md): source and model provenance policy
-- [phoible-coverage.md](phoible-coverage.md): source-specific IPA coverage analysis
 - [phoneme-clip-selection.md](phoneme-clip-selection.md): SplitMix64 selection from concatenated speech PCM
+- [bnns-validation.md](bnns-validation.md): MLX and BNNS inference-path validation
+- [official-weights-bnns-validation.md](official-weights-bnns-validation.md): upstream-checkpoint conversion validation
 - [../models/format.md](../models/format.md): SafeTensors and deployment tensor contract
-
-## Historical experiment records
-
-The following files preserve earlier measurements and are not the current training recommendation:
-
-- [training-benchmark.md](training-benchmark.md)
-- [tbptt-length-sweep.md](tbptt-length-sweep.md)
-- [stateful-tbptt-experiment.md](stateful-tbptt-experiment.md)
-- [state-diagnostics.md](state-diagnostics.md)
-- [two-segment-1000-experiment.md](two-segment-1000-experiment.md)
-- [native-gru-training-results.md](native-gru-training-results.md)
-- [test-training-results.md](test-training-results.md)
