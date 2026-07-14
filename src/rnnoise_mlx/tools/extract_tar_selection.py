@@ -12,10 +12,13 @@ from pathlib import Path
 def extract(archive_path: Path, selection_path: Path, output: Path) -> dict[str, object]:
     selection = json.loads(selection_path.read_text())
     extracted = []
+    selected = {record["path"]: record for record in selection["records"]}
     with tarfile.open(archive_path, "r:gz") as archive:
-        for record in selection["records"]:
-            member_name = record["path"]
-            member = archive.getmember(member_name)
+        for member in archive:
+            record = selected.get(member.name)
+            if record is None:
+                continue
+            member_name = member.name
             stream = archive.extractfile(member)
             if stream is None:
                 raise ValueError(f"cannot extract {member_name}")
@@ -34,6 +37,10 @@ def extract(archive_path: Path, selection_path: Path, output: Path) -> dict[str,
                     "sha256": hashlib.sha256(body).hexdigest(),
                 }
             )
+    if len(extracted) != len(selected):
+        found = {record["source_member"] for record in extracted}
+        missing = sorted(set(selected) - found)
+        raise ValueError(f"selected members missing from archive: {missing[:5]}")
     manifest = {
         "format_version": 1,
         "archive": str(archive_path.resolve()),
