@@ -8,6 +8,7 @@ points at those cleaned clips. The two models never share feature files.
 ## Frozen decisions
 
 - Cleaner speech: Kokoro 20%, AISHELL-3 40%, Zeroth Korean 40%.
+- Cleaner train population: 15 hours (Kokoro 3 h, AISHELL-3 6 h, Zeroth Korean 6 h).
 - Cleaner training: 2,000-frame sequences, carry-state TBPTT 250, 10,000 updates.
 - Cleaner augmentation: background noise and RIR enabled; foreground speech disabled.
 - Speech offsets: SplitMix64, seed 141 for train and 142 for evaluation.
@@ -72,8 +73,10 @@ python -m rnnoise_mlx.training.train \
   --mlflow-run-name cjk-cleaner-tbptt250-10k
 ```
 
-Export the checkpoint selected by comparing the 5k, 8k, and 10k listening
-outputs. The final model path below is therefore selected, not assumed best.
+The 10k checkpoint is the fixed cleaner candidate. Intermediate checkpoints
+remain diagnostic artifacts, but are not alternative production choices. If
+the 10k listening gate fails, stop before Common Voice cleanup and revise the
+cleaner experiment rather than silently selecting an earlier checkpoint.
 
 ```sh
 python -m rnnoise_mlx.tools.export_bnns_bundle \
@@ -105,10 +108,20 @@ edges. A cleaner that suppresses more noise but changes these sounds fails.
 
 ## Stage 2: distributable model
 
-Create `final-base-mix.json` with the final agreed populations. Japanese Common
-Voice entries point to `data/cv26-ja-clean/train` and `eval`; AISHELL-3 and
-Zeroth Korean point to their original prepared sources. Other retained
-populations, including the agreed 20 hours of English, are explicit entries.
+Copy `configs/final-base-90h.example.json` to `final-base-mix.json`. Its train
+population is fixed at 90 hours: 20 hours English, 50 hours official
+multilingual speech, 8 hours cleaned Japanese, 6 hours AISHELL-3, and 6 hours
+Zeroth Korean. The first 70 hours are the already verified prefix of the old
+100-hour PCM; the removed Vietnamese and Arabic blocks occur later and are not
+read. Evaluation is language-balanced separately at English 40% and Japanese,
+Mandarin, and Korean 20% each.
+
+This stage intentionally preserves the previous production-training method and
+the exact 16-language official 50-hour population. Vietnamese and Arabic alone
+are removed because maintaining sufficiently clean, commercially usable source
+populations is impractical for this run and would weaken the purpose of their
+inclusion. Their ten hours are not reassigned; changing other language weights
+would add a second corpus-mixture variable to the Common Voice cleanup test.
 
 ```sh
 python -m rnnoise_mlx.tools.prepare_speech_mix \
@@ -142,7 +155,7 @@ cleaning manifests, and all immutable training checkpoints.
 - both mix specifications and `speech-mix-manifest.json` files;
 - four SplitMix64 offset files and metadata JSON files;
 - cleaner feature command showing `--disable-foreground`;
-- cleaner 5k, 8k, and 10k checkpoints and listening outputs;
+- cleaner 10k checkpoint and listening output, plus retained intermediate diagnostic checkpoints;
 - compiled cleaner hashes and both Common Voice cleaning manifests;
 - original-versus-cleaned listening decision;
 - stage-two training metadata, checkpoints, and final listening pack.

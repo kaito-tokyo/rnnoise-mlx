@@ -117,8 +117,18 @@ def write_audio_directory(
 def render_split(
     specification: dict[str, object], split: str, destination: Path
 ) -> dict[str, object]:
-    sources = specification["sources"]
-    assert isinstance(sources, list)
+    configured_sources = specification["sources"]
+    assert isinstance(configured_sources, list)
+    sources = []
+    for configured in configured_sources:
+        assert isinstance(configured, dict)
+        weight = int(configured.get(f"{split}_weight", configured.get("weight", 0)))
+        if weight < 0:
+            raise ValueError(f"{configured['name']}: {split} weight must not be negative")
+        if weight:
+            sources.append({**configured, "weight": weight})
+    if not sources:
+        raise ValueError(f"no sources enabled for {split}")
     total_hours = float(specification[f"{split}_hours"])
     total_samples = round(total_hours * 3600 * RATE)
     targets = exact_targets(total_samples, sources)

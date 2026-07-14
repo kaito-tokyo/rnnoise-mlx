@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "train_hours": 30,
+  "train_hours": 15,
   "eval_hours": 1.5,
   "sources": [
     {
