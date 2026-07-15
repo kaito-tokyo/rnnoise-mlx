@@ -18,6 +18,7 @@
       "eval_weight": 20,
       "train": "data/cv26-ja-clean/train",
       "eval": "data/cv26-ja-clean/eval",
+      "train_repeat_to_target": true,
       "type": "audio-directory"
     },
     {

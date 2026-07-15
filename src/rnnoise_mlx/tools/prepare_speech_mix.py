@@ -8,6 +8,7 @@ speech populations can be compared without silently changing augmentation.
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import json
 from pathlib import Path
@@ -97,21 +98,40 @@ def write_pcm_prefix(output: BinaryIO, source: Path, samples: int) -> tuple[int,
 
 
 def write_audio_directory(
-    output: BinaryIO, source: Path, samples: int, namespace: str
-) -> tuple[int, list[str]]:
+    output: BinaryIO, source: Path, samples: int, namespace: str, *, repeat_to_target: bool = False
+) -> tuple[int, list[str], dict[str, object]]:
     written = 0
     used: list[str] = []
-    for path in stable_audio_paths(source, namespace):
+    paths = stable_audio_paths(source, namespace)
+    if not paths:
+        raise ValueError(f"audio directory is empty: {source}")
+    passes = 0
+    final_file_samples = 0
+    while written < samples:
+        passes += 1
+        before = written
+        for path in paths:
+            pcm = decode(path)
+            accepted = min(len(pcm) // SAMPLE_BYTES, samples - written)
+            output.write(pcm[: accepted * SAMPLE_BYTES])
+            written += accepted
+            used.append(str(path.resolve()))
+            final_file_samples = accepted
+            if written >= samples:
+                break
         if written >= samples:
             break
-        pcm = decode(path)
-        accepted = min(len(pcm) // SAMPLE_BYTES, samples - written)
-        output.write(pcm[: accepted * SAMPLE_BYTES])
-        written += accepted
-        used.append(str(path.resolve()))
-    if written != samples:
-        raise ValueError(f"audio shortage in {source}: wrote {written}, need {samples}")
-    return written, used
+        if not repeat_to_target:
+            raise ValueError(f"audio shortage in {source}: wrote {written}, need {samples}")
+        if written == before:
+            raise ValueError(f"audio directory produced no samples: {source}")
+    counts = collections.Counter(used)
+    return written, used, {
+        "repeat_to_target": repeat_to_target,
+        "passes": passes,
+        "file_use_counts": dict(sorted(counts.items())),
+        "final_file_samples": final_file_samples,
+    }
 
 
 def render_split(
@@ -142,10 +162,17 @@ def render_split(
             target = targets[name]
             if source_type == "pcm-s16le-48k-mono":
                 written, used = write_pcm_prefix(output, path, target)
+                reuse = {"repeat_to_target": False, "passes": 1,
+                         "file_use_counts": {str(path.resolve()): 1},
+                         "final_file_samples": written}
             elif source_type == "audio-directory":
                 if not path.is_dir():
                     raise ValueError(f"audio directory does not exist: {path}")
-                written, used = write_audio_directory(output, path, target, f"{split}:{name}")
+                repeat_to_target = bool(source.get(f"{split}_repeat_to_target",
+                                                   source.get("repeat_to_target", False)))
+                written, used, reuse = write_audio_directory(
+                    output, path, target, f"{split}:{name}", repeat_to_target=repeat_to_target
+                )
             else:
                 raise ValueError(f"unsupported source type for {name}: {source_type}")
             records.append(
@@ -157,6 +184,7 @@ def render_split(
                     "samples": written,
                     "hours": written / RATE / 3600,
                     "files": used,
+                    "reuse": reuse,
                 }
             )
     return {

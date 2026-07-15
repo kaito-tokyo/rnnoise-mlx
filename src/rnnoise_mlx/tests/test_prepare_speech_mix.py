@@ -5,6 +5,7 @@ from rnnoise_mlx.tools.prepare_speech_mix import (
     exact_targets,
     render_split,
     stable_audio_paths,
+    write_audio_directory,
     write_pcm_prefix,
 )
 
@@ -74,3 +75,22 @@ def test_render_split_uses_split_specific_weights(tmp_path: Path):
     render_split(specification, "eval", evaluation)
     assert train.read_bytes() == b"\x01\x00" * 2 + b"\x02\x00" * 2
     assert evaluation.read_bytes() == b"\x02\x00" * 4
+
+
+def test_write_audio_directory_repeats_only_when_enabled(tmp_path: Path, monkeypatch):
+    source = tmp_path / "audio"
+    source.mkdir()
+    clip = source / "clip.wav"
+    clip.write_bytes(b"placeholder")
+    monkeypatch.setattr("rnnoise_mlx.tools.prepare_speech_mix.decode",
+                        lambda path: b"\x01\x00" * 3)
+    output = io.BytesIO()
+    written, used, reuse = write_audio_directory(
+        output, source, 8, "train:jpn", repeat_to_target=True
+    )
+    assert written == 8
+    assert output.getvalue() == b"\x01\x00" * 8
+    assert used == [str(clip.resolve())] * 3
+    assert reuse["passes"] == 3
+    assert reuse["file_use_counts"] == {str(clip.resolve()): 3}
+    assert reuse["final_file_samples"] == 2

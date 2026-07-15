@@ -87,20 +87,33 @@ xcrun coremlcompiler compile runs/cjk-cleaner-10k/RNNoiseGraph.mlpackage \
   runs/cjk-cleaner-10k --platform macOS --deployment-target 15.0
 ```
 
-Clean only selected Common Voice Japanese splits. Interrupted runs reuse
-complete WAV files and remove incomplete output files.
+Measure leading speech margins on the already extracted eight-hour Common
+Voice selection. Keep clips whose -40 dBFS onset is at least 250 ms; do not
+refill from the later ten-hour selection.
 
 ```sh
-python -m rnnoise_mlx.tools.clean_audio_corpus \
-  "$DATASET/prepared/cv26-ja-selection/train" data/cv26-ja-clean/train \
-  --executable .build/release/rnnoise-mlx-denoise \
-  --model runs/cjk-cleaner-10k/RNNoiseGraph.mlmodelc --workers 4 --resume
+python -m rnnoise_mlx.tools.analyze_speech_onsets \
+  "$DATASET/prepared/cv26-ja-selection" data/cv26-ja-onsets \
+  --selection-manifest "$DATASET/api/common-voice-scripted-26.0/ja/clip-selection.json" \
+  --filter-threshold -40 --minimum-onset-ms 250 --workers 8
 
 python -m rnnoise_mlx.tools.clean_audio_corpus \
-  "$DATASET/prepared/cv26-ja-selection/eval" data/cv26-ja-clean/eval \
+  "$DATASET/prepared/cv26-ja-selection" data/cv26-ja-clean-full \
   --executable .build/release/rnnoise-mlx-denoise \
-  --model runs/cjk-cleaner-10k/RNNoiseGraph.mlmodelc --workers 4 --resume
+  --model runs/cjk-cleaner-10k/RNNoiseGraph.mlmodelc \
+  --filter-manifest data/cv26-ja-onsets/filter-manifest.json --workers 4 --resume
+
+python -m rnnoise_mlx.tools.trim_audio_corpus \
+  data/cv26-ja-clean-full data/cv26-ja-clean \
+  --filter-manifest data/cv26-ja-onsets/filter-manifest.json \
+  --threshold -40 --margin-ms 150 --workers 4 --resume
 ```
+
+The full leading margin is available to the cleaner, but only 150 ms before
+the measured onset is retained for stage-two clean speech. The filtered and
+trimmed training population is shorter than eight unique hours, so the final
+mix specification opts the Japanese training source into deterministic
+stable-order repetition. Evaluation does not repeat its Japanese source.
 
 Do not proceed automatically. Compare original and cleaned fixed Japanese
 clips, especially unvoiced vowels, `/ɕ/`, geminates, moraic nasals, and word
