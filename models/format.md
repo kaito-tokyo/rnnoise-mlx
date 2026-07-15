@@ -11,12 +11,14 @@ Tensor names follow the MLX module tree. GRU tensors use gate order
 - `gru{1,2,3}.Wx`, `.Wh`, `.b`, `.bhn`
 - `gain.weight`, `gain.bias`, `vad.weight`, `vad.bias`
 
-The intermediate conversion bundle uses magic `RNMLXBN1`, format version 1,
-dimensions stored in its header, and 20 named little-endian float32 tensor
-records. Both the original `65/128/256/32` MLX profile and the official
-`65/128/384/32` RNNoise profile are supported.
-Generate it with `python -m rnnoise_mlx.tools.export_bnns_bundle`. The
-`python -m rnnoise_mlx.tools.export_bnns_graph` converter validates its structure and emits a Core ML
+The canonical deployment schema uses the same 20 float32 tensors in a standard
+SafeTensors container. Metadata identifies `rnnoise-mlx-canonical` schema
+version 1, the model dimensions, GRU gate order, and bias layout. Both the
+original `65/128/256/32` MLX profile and the official `65/128/384/32` RNNoise
+profile are supported. Training artifacts already have this tensor layout and
+can be passed directly to `python -m rnnoise_mlx.tools.export_bnns_graph`.
+`python -m rnnoise_mlx.tools.export_canonical_weights` optionally writes an explicitly
+versioned canonical artifact for interchange. The graph converter validates the weights and emits a Core ML
 package containing one stateful frame graph. Xcode's `coremlcompiler` turns that
 package into the `.mlmodelc` directory loaded by the C BNNSGraph runtime.
 
@@ -32,6 +34,9 @@ recurrent reset/update biases are summed, while the candidate recurrent bias is
 stored separately as `bhn`; this preserves the GRU equation even though the
 serialized bias split changes. The reverse conversion emits a checkpoint that
 upstream's `dump_rnnoise_weights.py` accepts.
+
+Legacy files with the `RNMLXBN1` magic remain readable for migration, but new
+canonical artifacts are written as SafeTensors.
 
 MLX uses `b = [b_ir+b_hr, b_iz+b_hz, b_in]` and `bhn = b_hn`. This is
 mathematically equivalent to the separate PyTorch/RNNoise input and recurrent

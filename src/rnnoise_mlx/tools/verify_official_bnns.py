@@ -11,13 +11,13 @@ import tempfile
 import numpy as np
 import torch
 
-from .rnnoise_weights import infer_streaming, read_bundle
+from .rnnoise_weights import infer_streaming, read_weights
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--weights", "--bundle", dest="weights", type=Path, required=True)
     parser.add_argument("--graph", type=Path, required=True)
     parser.add_argument("--features", type=Path, required=True)
     parser.add_argument("--runner", type=Path, required=True)
@@ -43,7 +43,7 @@ def main() -> None:
     with torch.no_grad():
         gains, vad, _ = model(torch.from_numpy(padded[None].copy()))
     pytorch_reference = np.concatenate((gains[0].numpy(), vad[0].numpy()), axis=-1)
-    canonical, config = read_bundle(args.bundle)
+    canonical, config = read_weights(args.weights)
     canonical_gains, canonical_vad = infer_streaming(canonical, config, values)
     reference = np.concatenate((canonical_gains, canonical_vad), axis=-1)
 

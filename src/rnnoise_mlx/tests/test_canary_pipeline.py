@@ -7,13 +7,13 @@ import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
 
-from rnnoise_mlx.tools.export_bnns_bundle import export_checkpoint
-from rnnoise_mlx.tools.rnnoise_weights import infer_streaming, read_bundle
+from rnnoise_mlx.tools.export_canonical_weights import export_checkpoint
+from rnnoise_mlx.tools.rnnoise_weights import infer_streaming, read_weights
 from rnnoise_mlx.training.loss import rnnoise_loss
 from rnnoise_mlx.training.model import ModelConfig, RNNoise
 
 
-def test_safetensors_to_bundle_streaming_canary(tmp_path: Path):
+def test_training_safetensors_streaming_canary(tmp_path: Path):
     """Exercise the official model from MLX persistence through deployment inference."""
     mx.random.seed(17)
     model = RNNoise()
@@ -49,7 +49,7 @@ def test_safetensors_to_bundle_streaming_canary(tmp_path: Path):
     mx.eval(expected_gain, expected_vad)
 
     checkpoint = tmp_path / "model.safetensors"
-    bundle = tmp_path / "model.bnns"
+    canonical = tmp_path / "model.canonical.safetensors"
     model.save(str(checkpoint))
     reloaded = RNNoise.load(str(checkpoint), ModelConfig())
     state = (
@@ -68,8 +68,8 @@ def test_safetensors_to_bundle_streaming_canary(tmp_path: Path):
     reloaded_vad = mx.concatenate(reloaded_vads, axis=1)
     mx.eval(reloaded_gain, reloaded_vad)
 
-    export_checkpoint(checkpoint, bundle)
-    weights, config = read_bundle(bundle)
+    # Training artifacts can be consumed directly; canonical export is optional.
+    weights, config = read_weights(checkpoint)
     actual_gain, actual_vad = infer_streaming(
         weights,
         config,
@@ -86,3 +86,9 @@ def test_safetensors_to_bundle_streaming_canary(tmp_path: Path):
         "gru_size": 384,
         "output_dim": 32,
     }
+
+    export_checkpoint(checkpoint, canonical)
+    canonical_weights, canonical_config = read_weights(canonical)
+    assert canonical_config == config
+    for name in weights:
+        np.testing.assert_array_equal(canonical_weights[name], weights[name])

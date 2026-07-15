@@ -1,13 +1,18 @@
-"""Canonical RNNoise weight bundle shared by conversion and export commands."""
+"""Canonical RNNoise weight schema shared by conversion and export commands."""
 
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import struct
 
 import numpy as np
+from safetensors import safe_open
+from safetensors.numpy import save_file
 
 MAGIC = b"RNMLXBN1"
+SCHEMA = "rnnoise-mlx-canonical"
+SCHEMA_VERSION = 1
 TENSORS = (
     "conv1.weight", "conv1.bias", "conv2.weight", "conv2.bias",
     "gru1.Wx", "gru1.Wh", "gru1.b", "gru1.bhn",
@@ -34,23 +39,38 @@ def shapes(cond_size: int, gru_size: int, input_dim: int = 65, output_dim: int =
     return result
 
 
-def write_bundle(path: Path, weights: dict[str, np.ndarray], cond_size: int, gru_size: int) -> None:
-    expected = shapes(cond_size, gru_size)
+def _validate(weights: dict[str, np.ndarray], config: dict[str, int]) -> dict[str, np.ndarray]:
+    if config["input_dim"] != 65 or config["output_dim"] != 32:
+        raise ValueError("unsupported canonical RNNoise dimensions")
+    expected = shapes(config["cond_size"], config["gru_size"])
     if set(weights) != set(TENSORS):
         raise ValueError("canonical tensor set does not match RNNoise format")
+    canonical = {}
+    for name in TENSORS:
+        value = np.asarray(weights[name], dtype=np.float32)
+        if value.shape != expected[name]:
+            raise ValueError(f"{name}: expected {expected[name]}, got {value.shape}")
+        canonical[name] = np.ascontiguousarray(value)
+    return canonical
+
+
+def write_weights(path: Path, weights: dict[str, np.ndarray], cond_size: int, gru_size: int) -> None:
+    """Write the canonical deployment schema in a standard SafeTensors container."""
+    config = {"input_dim": 65, "cond_size": cond_size, "gru_size": gru_size, "output_dim": 32}
+    canonical = _validate(weights, config)
+    metadata = {
+        "schema": SCHEMA,
+        "schema_version": str(SCHEMA_VERSION),
+        "config": json.dumps(config, separators=(",", ":"), sort_keys=True),
+        "gru_gate_order": "reset,update,new",
+        "gru_bias_layout": "combined-reset-update,candidate-recurrent-bhn",
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as output:
-        output.write(struct.pack("<8s6I", MAGIC, 1, 65, cond_size, gru_size, 32, len(TENSORS)))
-        for name in TENSORS:
-            value = np.asarray(weights[name], dtype="<f4")
-            if value.shape != expected[name]:
-                raise ValueError(f"{name}: expected {expected[name]}, got {value.shape}")
-            encoded = name.encode("ascii")
-            output.write(struct.pack("<32sQ", encoded, value.size))
-            output.write(value.tobytes())
+    save_file(canonical, str(path), metadata=metadata)
 
 
-def read_bundle(path: Path):
+def _read_legacy_bundle(path: Path):
+    """Read the retired RNMLXBN1 container for backwards compatibility."""
     with path.open("rb") as stream:
         header = stream.read(32)
         if len(header) != 32:
@@ -74,8 +94,38 @@ def read_bundle(path: Path):
             result[name] = np.frombuffer(raw, dtype="<f4").copy().reshape(expected[name])
         if stream.read(1):
             raise ValueError("trailing data in canonical bundle")
-    return result, {"input_dim": input_dim, "cond_size": cond_size,
-                    "gru_size": gru_size, "output_dim": output_dim}
+    config = {"input_dim": input_dim, "cond_size": cond_size,
+              "gru_size": gru_size, "output_dim": output_dim}
+    return _validate(result, config), config
+
+
+def read_weights(path: Path):
+    """Read a training/canonical SafeTensors file or a legacy RNMLXBN1 bundle."""
+    with path.open("rb") as stream:
+        if stream.read(len(MAGIC)) == MAGIC:
+            return _read_legacy_bundle(path)
+
+    with safe_open(str(path), framework="np") as source:
+        metadata = source.metadata() or {}
+        try:
+            config = json.loads(metadata["config"])
+        except (KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ValueError("SafeTensors weights are missing valid config metadata") from error
+        try:
+            config = {name: int(config[name]) for name in ("input_dim", "cond_size", "gru_size", "output_dim")}
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("SafeTensors weights contain an invalid model config") from error
+        if "schema" in metadata and (
+            metadata["schema"] != SCHEMA or metadata.get("schema_version") != str(SCHEMA_VERSION)
+        ):
+            raise ValueError("unsupported canonical SafeTensors schema")
+        weights = {name: source.get_tensor(name) for name in source.keys()}
+    return _validate(weights, config), config
+
+
+# Compatibility for callers using the old API. New files written here are SafeTensors.
+read_bundle = read_weights
+write_bundle = write_weights
 
 
 def infer_streaming(weights: dict[str, np.ndarray], config: dict[str, int], features: np.ndarray):

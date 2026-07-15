@@ -1,4 +1,4 @@
-"""Export a canonical RNNoise bundle as a Core ML BNNSGraph package."""
+"""Export RNNoise SafeTensors weights as a Core ML BNNSGraph package."""
 
 from __future__ import annotations
 
@@ -10,16 +10,16 @@ from coremltools.converters.mil import Builder as mb
 from coremltools.converters.mil.mil import types
 import numpy as np
 
-from .rnnoise_weights import read_bundle
+from .rnnoise_weights import read_weights
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("bundle", type=Path, help="RNMLXBN1 bundle produced by export_bnns_bundle.py")
+    parser.add_argument("weights", type=Path, help="training or canonical SafeTensors weights")
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
 
-    w, config = read_bundle(args.bundle)
+    w, config = read_weights(args.weights)
     cond_size, gru_size = config["cond_size"], config["gru_size"]
 
     def linear(x, prefix: str, name: str, bias: bool = True):
