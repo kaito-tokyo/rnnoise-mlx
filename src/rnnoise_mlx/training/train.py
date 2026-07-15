@@ -19,7 +19,7 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .evaluate import evaluate
 from .loss import rnnoise_loss, rnnoise_loss_aligned
 from .model import ModelConfig, RNNoise
-from .tracking import MLflowTracker
+from .tracking import MLflowTracker, validate_tracking_target
 
 
 def main():
@@ -63,7 +63,11 @@ def main():
     parser.add_argument("--equalize-reset-targets", action="store_true")
     parser.add_argument("--mlflow-tracking-uri", required=True)
     parser.add_argument("--mlflow-experiment", required=True)
-    parser.add_argument("--mlflow-run-name", required=True)
+    parser.add_argument("--mlflow-run-name")
+    parser.add_argument(
+        "--mlflow-run-id",
+        help="resume logging to an existing MLflow run while retaining its name",
+    )
     parser.add_argument("--checkpoint-every", type=int, default=32)
     parser.add_argument(
         "--resume-from",
@@ -78,17 +82,19 @@ def main():
         parser.error("segmented TBPTT and --stateful-tbptt are mutually exclusive")
     if args.checkpoint_every <= 0:
         parser.error("--checkpoint-every must be positive")
+    if args.resume_from is None:
+        if args.mlflow_run_id is not None:
+            parser.error("--mlflow-run-id requires --resume-from")
+        if args.mlflow_run_name is None:
+            parser.error("--mlflow-run-name is required for a new run")
+    elif args.mlflow_run_id is None:
+        parser.error("--resume-from requires --mlflow-run-id")
 
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    tracker = MLflowTracker(
-        args.mlflow_tracking_uri,
-        args.mlflow_experiment,
-        args.mlflow_run_name,
-        output.resolve(),
-        vars(args),
+    validate_tracking_target(
+        args.mlflow_tracking_uri, args.mlflow_experiment, args.mlflow_run_id
     )
-    print(json.dumps({"mlflow_run_id": tracker.run_id}), flush=True)
     dataset = FeatureDataset(args.features, args.sequence_length)
     mx.random.seed(args.seed)
     config = ModelConfig()
@@ -115,9 +121,23 @@ def main():
             json.dumps({"resumed_from": str(args.resume_from), "update": update}),
             flush=True,
         )
+    tracker = MLflowTracker(
+        args.mlflow_tracking_uri,
+        args.mlflow_experiment,
+        args.mlflow_run_name,
+        args.mlflow_run_id,
+        output.resolve(),
+        vars(args),
+    )
+    print(json.dumps({"mlflow_run_id": tracker.run_id}), flush=True)
     eval_dataset = FeatureDataset(args.eval_features, args.sequence_length) if args.eval_features else None
-    initial_evaluation = evaluate(model, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
-    tracker.log_evaluation("initial", initial_evaluation, 0)
+    if args.resume_from is None:
+        initial_evaluation = (
+            evaluate(model, eval_dataset, args.batch_size, args.gamma)
+            if eval_dataset
+            else None
+        )
+        tracker.log_evaluation("initial", initial_evaluation, 0)
 
     def objective(model, features, gain, vad):
         pred_gain, pred_vad, _ = model(features)

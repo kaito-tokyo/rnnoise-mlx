@@ -61,7 +61,8 @@ frames.
 The current corpus-cleaning and promoted-training parameters are documented in
 [the CJK two-stage procedure](docs/cjk-two-stage-training.md).
 
-The training command requires an MLflow tracking URI, experiment, and run name.
+The training command requires an MLflow tracking URI and experiment, plus either
+a run name for a new run or a run ID for an existing run.
 It checks the server before evaluation or optimization, logs loss every ten
 updates, records initial/trained/reloaded evaluation, and uploads the final
 `model.safetensors`, `training.json`, and every complete checkpoint. Keep
@@ -75,8 +76,15 @@ counters, and training history. Resume with:
 
 ```sh
 python -m rnnoise_mlx.training.train ... \
+  --mlflow-run-id EXISTING_RUN_ID \
   --resume-from OUTPUT/checkpoints/update-00000500
 ```
+
+Pass the original MLflow run ID when continuing the same logical training run.
+This retains the existing run name and appends metrics and artifacts to that run.
+`--resume-from` and `--mlflow-run-id` must be specified together. Omit both when
+a restart should be tracked as a separate trial. Resumed runs retain the original
+initial evaluation instead of logging the checkpoint evaluation again at step 0.
 
 Checkpoints are committed only at batch boundaries, so prefetched input cannot
 move the saved data cursor past the next batch. The legacy `--stateful-tbptt`

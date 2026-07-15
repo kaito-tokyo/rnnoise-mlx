@@ -37,6 +37,26 @@ def _git_metadata(root: Path) -> dict[str, str]:
     }
 
 
+def validate_tracking_target(
+    tracking_uri: str, experiment: str, run_id: str | None = None
+):
+    """Verify server access and, when resuming, the run's experiment."""
+    mlflow.set_tracking_uri(tracking_uri)
+    client = MlflowClient()
+    client.search_experiments(max_results=1)
+    if run_id is None:
+        return None
+    selected_experiment = client.get_experiment_by_name(experiment)
+    if selected_experiment is None:
+        raise ValueError(f"MLflow experiment does not exist: {experiment}")
+    existing_run = client.get_run(run_id)
+    if existing_run.info.experiment_id != selected_experiment.experiment_id:
+        raise ValueError(
+            f"MLflow run {run_id} does not belong to experiment {experiment}"
+        )
+    return existing_run
+
+
 class MLflowTracker:
     """Own one remote MLflow run and finalize it on success or failure."""
 
@@ -44,27 +64,43 @@ class MLflowTracker:
         self,
         tracking_uri: str,
         experiment: str,
-        run_name: str,
+        run_name: str | None,
+        run_id: str | None,
         output: Path,
         parameters: dict[str, Any],
     ) -> None:
-        mlflow.set_tracking_uri(tracking_uri)
         # Fail before evaluation or training if the server cannot be reached.
-        MlflowClient().search_experiments(max_results=1)
-        mlflow.set_experiment(experiment)
-        self.run = mlflow.start_run(
-            run_name=run_name,
-            tags={
-                "job_type": "training",
-                **_git_metadata(Path(__file__).resolve().parents[3]),
-            },
-        )
+        existing_run = validate_tracking_target(tracking_uri, experiment, run_id)
+        tags = {
+            "job_type": "training",
+            **_git_metadata(Path(__file__).resolve().parents[3]),
+        }
+        if run_id is None:
+            mlflow.set_experiment(experiment)
+            self.run = mlflow.start_run(run_name=run_name, tags=tags)
+        else:
+            assert existing_run is not None
+            self.run = mlflow.start_run(run_id=run_id)
+            mlflow.set_tags({**tags, "resumed": "true"})
         self.closed = False
         normalized = {
             key: str(value) if isinstance(value, Path) or value is None else value
             for key, value in parameters.items()
+            if key != "mlflow_run_id"
         }
-        mlflow.log_params(normalized)
+        if run_id is None:
+            mlflow.log_params(normalized)
+        else:
+            # MLflow parameters are immutable. Preserve the original invocation
+            # and only fill parameters absent from an older run.
+            existing_params = existing_run.data.params
+            mlflow.log_params(
+                {
+                    key: value
+                    for key, value in normalized.items()
+                    if key not in existing_params
+                }
+            )
         atexit.register(self.fail_if_open)
 
     @property
