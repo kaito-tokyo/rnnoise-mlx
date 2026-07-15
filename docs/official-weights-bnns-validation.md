@@ -7,7 +7,7 @@ for the direct C-versus-BNNS comparison below.
 
 ```text
 official PyTorch checkpoint
-  -> canonical RNMLXBN1 float32 bundle
+  -> canonical SafeTensors float32 artifact
   -> Core ML package
   -> compiled BNNSGraph mlmodelc
 ```

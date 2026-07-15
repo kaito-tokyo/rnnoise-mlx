@@ -123,33 +123,31 @@ and synthesizes a 48 kHz mono WAV. See
 
 ## BNNSGraph export
 
-The deployment model is a Core ML package compiled for BNNSGraph. The compact
-`RNMLXBN1` file is only an intermediate, portable weight container used by the
-training-side converter.
+The deployment model is a Core ML package compiled for BNNSGraph. Training
+SafeTensors artifacts already use the canonical tensor layout and can be
+converted directly; producing a separate intermediate file is optional.
 
 ```sh
-.venv/bin/python -m rnnoise_mlx.tools.export_bnns_bundle \
-  runs/model/model.safetensors runs/model/model.bnns
 .venv/bin/python -m rnnoise_mlx.tools.export_bnns_graph \
-  runs/model/model.bnns runs/model/RNNoiseGraph.mlpackage
+  runs/model/model.safetensors runs/model/RNNoiseGraph.mlpackage
 xcrun coremlcompiler compile runs/model/RNNoiseGraph.mlpackage runs/model \
   --platform macOS --deployment-target 15.0
 ```
 
 Official RNNoise PyTorch checkpoints can be converted without retraining. The
-canonical `RNMLXBN1` bundle is bidirectional: it can also be exported back to a
+canonical SafeTensors artifact is bidirectional: it can also be exported back to a
 checkpoint accepted by upstream's `dump_rnnoise_weights.py`.
 
 ```sh
 .venv/bin/python -m rnnoise_mlx.tools.convert_official_weights import \
-  rnnoise10Ga_12.pth official.bnns
+  rnnoise10Ga_12.pth official.canonical.safetensors
 .venv/bin/python -m rnnoise_mlx.tools.export_bnns_graph \
-  official.bnns OfficialRNNoiseGraph.mlpackage
+  official.canonical.safetensors OfficialRNNoiseGraph.mlpackage
 xcrun coremlcompiler compile OfficialRNNoiseGraph.mlpackage . \
   --platform macOS --deployment-target 15.0
 
 .venv/bin/python -m rnnoise_mlx.tools.convert_official_weights export \
-  official.bnns official-roundtrip.pth
+  official.canonical.safetensors official-roundtrip.pth
 ```
 
 `rnnoise10Ga_12.pth` is the closest match for the generated quantized/sparse

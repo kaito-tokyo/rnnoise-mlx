@@ -1,7 +1,7 @@
 # C/BNNSGraph inference validation — 2026-07-12
 
-The base-model SafeTensors checkpoint is converted to an intermediate
-`RNMLXBN1` weight bundle, then to a Core ML package and compiled `.mlmodelc`.
+The base-model SafeTensors checkpoint is converted directly to a Core ML
+package and compiled `.mlmodelc`.
 The C implementation loads that model with `BNNSGraphCompileFromFile`, executes
 the complete frame network in one graph context, and preserves causal
 convolution and recurrent state across calls.
@@ -37,11 +37,12 @@ AVFoundation successfully decoded both a 24 kHz mono WAV and a 48 kHz stereo
 AAC/M4A excerpt from an LDTX recording. The executable generated 48 kHz mono
 WAV files with exactly the expected duration (10.120 seconds and 5.000 seconds).
 
-The source weight bundle used for this validation is stored at:
+The historical source weight bundle used for this validation is stored at:
 
 ```text
 /Users/umireon/Datasets/base-model-320/model.bnns
 ```
 
-It is an intermediate conversion artifact, not a runtime model. Deploy the
-compiled `RNNoiseGraph.mlmodelc` directory with the application.
+It is a legacy `RNMLXBN1` intermediate artifact retained as validation
+provenance. New conversions accept training or canonical SafeTensors directly.
+Deploy the compiled `RNNoiseGraph.mlmodelc` directory with the application.

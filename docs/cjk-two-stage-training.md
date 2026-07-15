@@ -79,10 +79,8 @@ the 10k listening gate fails, stop before Common Voice cleanup and revise the
 cleaner experiment rather than silently selecting an earlier checkpoint.
 
 ```sh
-python -m rnnoise_mlx.tools.export_bnns_bundle \
-  runs/cjk-cleaner-10k/model.safetensors runs/cjk-cleaner-10k/model.bnns
 python -m rnnoise_mlx.tools.export_bnns_graph \
-  runs/cjk-cleaner-10k/model.bnns runs/cjk-cleaner-10k/RNNoiseGraph.mlpackage
+  runs/cjk-cleaner-10k/model.safetensors runs/cjk-cleaner-10k/RNNoiseGraph.mlpackage
 xcrun coremlcompiler compile runs/cjk-cleaner-10k/RNNoiseGraph.mlpackage \
   runs/cjk-cleaner-10k --platform macOS --deployment-target 15.0
 ```

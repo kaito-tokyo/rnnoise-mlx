@@ -1,4 +1,4 @@
-"""Convert official RNNoise PyTorch weights to/from the canonical bundle."""
+"""Convert official RNNoise PyTorch weights to/from canonical SafeTensors."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .rnnoise_weights import read_bundle, write_bundle
+from .rnnoise_weights import read_weights, write_weights
 
 
 def import_official(source: Path, output: Path) -> None:
@@ -34,11 +34,11 @@ def import_official(source: Path, output: Path) -> None:
             bias_ih[2 * gru_size:],
         ))
         weights[f"{prefix}.bhn"] = bias_hh[2 * gru_size:]
-    write_bundle(output, weights, cond_size, gru_size)
+    write_weights(output, weights, cond_size, gru_size)
 
 
 def export_official(source: Path, output: Path) -> None:
-    weights, config = read_bundle(source)
+    weights, config = read_weights(source)
     gru_size = config["gru_size"]
     state = {
         "conv1.weight": torch.from_numpy(weights["conv1.weight"].transpose(0, 2, 1).copy()),
