@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <errno.h>
 #include "rnnoise.h"
@@ -143,43 +144,59 @@ void rir_filter_sequence(const struct rir_list *rirs, float *audio, int rir_id, 
   }
 }
 
-static unsigned rand_lcg(unsigned *seed) {
-  *seed = 1664525**seed + 1013904223;
-  return *seed;
+/* SplitMix64-domain-v1: every augmentation domain has an independent stream. */
+struct domain_rng { uint64_t seed, sequence, domain, counter; };
+
+static uint64_t splitmix64(uint64_t x) {
+  x += UINT64_C(0x9e3779b97f4a7c15);
+  x = (x ^ (x >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+  x = (x ^ (x >> 27)) * UINT64_C(0x94d049bb133111eb);
+  return x ^ (x >> 31);
 }
 
-static float uni_rand() {
-  return rand()/(double)RAND_MAX-.5;
+static uint64_t rng_u64(struct domain_rng *rng) {
+  uint64_t key = splitmix64(rng->seed ^ UINT64_C(0x243f6a8885a308d3))
+      ^ splitmix64(rng->sequence ^ UINT64_C(0x13198a2e03707344))
+      ^ splitmix64(rng->domain ^ UINT64_C(0xa4093822299f31d0))
+      ^ splitmix64(rng->counter++ ^ UINT64_C(0x082efa98ec4e6c89));
+  return splitmix64(key);
 }
 
-static float randf(float f) {
-  return f*rand()/(double)RAND_MAX;
+static double rng_unit(struct domain_rng *rng) {
+  return (rng_u64(rng) >> 11) * 0x1p-53;
 }
 
-static void rand_filt(float *a) {
-  if (rand()%3!=0) {
+static unsigned rng_bounded(struct domain_rng *rng, unsigned bound) {
+  return (unsigned)(rng_u64(rng) % bound);
+}
+
+static float uni_rand(struct domain_rng *rng) { return rng_unit(rng)-.5; }
+static float randf(struct domain_rng *rng, float f) { return f*rng_unit(rng); }
+
+static void rand_filt(struct domain_rng *rng, float *a) {
+  if (rng_bounded(rng, 3)!=0) {
     a[0] = a[1] = 0;
   }
-  else if (uni_rand()>0) {
+  else if (uni_rand(rng)>0) {
     float r, theta;
-    r = rand()/(double)RAND_MAX;
+    r = rng_unit(rng);
     r = .7*r*r;
-    theta = rand()/(double)RAND_MAX;
+    theta = rng_unit(rng);
     theta = M_PI*theta*theta;
     a[0] = -2*r*cos(theta);
     a[1] = r*r;
   } else {
     float r0,r1;
-    r0 = 1.4*uni_rand();
-    r1 = 1.4*uni_rand();
+    r0 = 1.4*uni_rand(rng);
+    r1 = 1.4*uni_rand(rng);
     a[0] = -r0-r1;
     a[1] = r0*r1;
   }
 }
 
-static void rand_resp(float *a, float *b) {
-  rand_filt(a);
-  rand_filt(b);
+static void rand_resp(struct domain_rng *rng, float *a, float *b) {
+  rand_filt(rng, a);
+  rand_filt(rng, b);
 }
 
 short speech16[SEQUENCE_LENGTH*FRAME_SIZE];
@@ -309,17 +326,17 @@ int main(int argc, char **argv) {
   int disable_foreground = 0;
   long speech_length, noise_length, fgnoise_length;
   int maxCount;
-  unsigned seed;
+  uint64_t seed = 0;
+  uint64_t sequence_start = 0;
+  uint64_t speech_offset_start = 0;
   DenoiseState *st;
   DenoiseState *noisy;
   char *argv0;
   char *rir_filename = NULL;
   char *speech_offsets_filename = NULL;
   struct rir_list rirs;
-  seed = getpid();
-  srand(seed);
-  st = rnnoise_create(NULL);
-  noisy = rnnoise_create(NULL);
+  st = NULL;
+  noisy = NULL;
   argv0 = argv[0];
   while (argc>6) {
     if (strcmp(argv[1], "-rir_list")==0) {
@@ -337,12 +354,27 @@ int main(int argc, char **argv) {
       argv++;
       argc--;
     }
+    else if (strcmp(argv[1], "-seed")==0) {
+      seed = strtoull(argv[2], NULL, 0);
+      argv+=2;
+      argc-=2;
+    }
+    else if (strcmp(argv[1], "-sequence_start")==0) {
+      sequence_start = strtoull(argv[2], NULL, 0);
+      argv+=2;
+      argc-=2;
+    }
+    else if (strcmp(argv[1], "-speech_offset_start")==0) {
+      speech_offset_start = strtoull(argv[2], NULL, 0);
+      argv+=2;
+      argc-=2;
+    }
     else {
       break;
     }
   }
   if (argc!=6) {
-    fprintf(stderr, "usage: %s [-rir_list list] [-speech_offsets offsets] [-disable_foreground] <speech> <noise> <fg_noise> <output> <count>\n", argv0);
+    fprintf(stderr, "usage: %s [-rir_list list] [-speech_offsets offsets] [-speech_offset_start index] [-disable_foreground] [-seed seed] [-sequence_start index] <speech> <noise> <fg_noise> <output> <count>\n", argv0);
     return 1;
   }
   f1 = fopen(argv[1], "rb");
@@ -364,14 +396,31 @@ int main(int argc, char **argv) {
 
   maxCount = atoi(argv[5]);
   if (speech_offsets_filename) {
+    uint64_t offset_index;
     speech_offsets = fopen(speech_offsets_filename, "r");
     if (speech_offsets==NULL) {
       fprintf(stderr, "cannot open %s: %s\n", speech_offsets_filename, strerror(errno));
       return 1;
     }
+    for (offset_index=0;offset_index<speech_offset_start;offset_index++) {
+      long ignored_offset;
+      if (fscanf(speech_offsets, "%ld", &ignored_offset) != 1) {
+        fprintf(stderr, "speech offset manifest has fewer than %llu entries\n", (unsigned long long)speech_offset_start);
+        return 1;
+      }
+    }
   }
   if (rir_filename) load_rir_list(rir_filename, &rirs);
   for (count=0;count<maxCount;count++) {
+    uint64_t sequence = sequence_start + (uint64_t)count;
+    struct domain_rng offsets_rng = {seed, sequence, 1, 0};
+    struct domain_rng start_rng = {seed, sequence, 2, 0};
+    struct domain_rng gains_rng = {seed, sequence, 3, 0};
+    struct domain_rng filters_rng = {seed, sequence, 4, 0};
+    struct domain_rng lowpass_rng = {seed, sequence, 5, 0};
+    struct domain_rng rir_rng = {seed, sequence, 6, 0};
+    struct domain_rng clipping_rng = {seed, sequence, 7, 0};
+    struct domain_rng quantize_rng = {seed, sequence, 8, 0};
     int rir_id;
     int vad[SEQUENCE_LENGTH];
     long speech_pos, noise_pos, fgnoise_pos;
@@ -386,22 +435,26 @@ int main(int argc, char **argv) {
     float features[NB_FEATURES];
     float g[NB_BANDS];
     float speech_rms, noise_rms, fgnoise_rms;
+    if (st) rnnoise_destroy(st);
+    if (noisy) rnnoise_destroy(noisy);
+    st = rnnoise_create(NULL);
+    noisy = rnnoise_create(NULL);
     if ((count%1000)==0) fprintf(stderr, "%d\r", count);
     if (speech_offsets) {
       long speech_sample_offset;
       if (fscanf(speech_offsets, "%ld", &speech_sample_offset) != 1) {
-        fprintf(stderr, "speech offset manifest has fewer than %d entries\n", maxCount);
+        fprintf(stderr, "speech offset manifest has fewer than %llu entries\n", (unsigned long long)(speech_offset_start + maxCount));
         return 1;
       }
       if (speech_sample_offset < 0 || speech_sample_offset > (speech_length-(long)sizeof(speech16))/2) {
-        fprintf(stderr, "speech sample offset out of range at entry %d: %ld\n", count, speech_sample_offset);
+        fprintf(stderr, "speech sample offset out of range at entry %llu: %ld\n", (unsigned long long)(speech_offset_start + count), speech_sample_offset);
         return 1;
       }
       speech_pos = 2*speech_sample_offset;
     }
-    else speech_pos = (rand_lcg(&seed)*2.3283e-10)*speech_length;
-    noise_pos = (rand_lcg(&seed)*2.3283e-10)*noise_length;
-    fgnoise_pos = (rand_lcg(&seed)*2.3283e-10)*fgnoise_length;
+    else speech_pos = rng_unit(&offsets_rng)*speech_length;
+    noise_pos = rng_unit(&offsets_rng)*noise_length;
+    fgnoise_pos = rng_unit(&offsets_rng)*fgnoise_length;
     if (speech_pos > speech_length-(long)sizeof(speech16)) speech_pos = speech_length-sizeof(speech16);
     if (noise_pos > noise_length-(long)sizeof(noise16)) noise_pos = noise_length-sizeof(noise16);
     if (fgnoise_pos > fgnoise_length-(long)sizeof(fgnoise16)) fgnoise_pos = fgnoise_length-sizeof(fgnoise16);
@@ -414,26 +467,27 @@ int main(int argc, char **argv) {
     fread(speech16, sizeof(speech16), 1, f1);
     fread(noise16, sizeof(noise16), 1, f2);
     fread(fgnoise16, sizeof(fgnoise16), 1, f3);
-    if (rand()%4) start_pos = 0;
-    else start_pos = -(int)(1000*log(rand()/(float)RAND_MAX));
+    if (rng_bounded(&start_rng, 4)) start_pos = 0;
+    else start_pos = -(int)(1000*log(MAX16(0x1p-53, rng_unit(&start_rng))));
     start_pos = IMIN(start_pos, SEQUENCE_LENGTH*FRAME_SIZE);
 
-    speech_gain = pow(10., (-45+randf(45.f)+randf(10.f))/20.);
-    noise_gain = pow(10., (-30+randf(40.f)+randf(15.f))/20.);
-    fgnoise_gain = pow(10., (-30+randf(40.f)+randf(15.f))/20.);
-    if (rand()%8==0) noise_gain = 0;
-    if (rand()%8!=0) fgnoise_gain = 0;
+    speech_gain = pow(10., (-45+randf(&gains_rng, 45.f)+randf(&gains_rng, 10.f))/20.);
+    noise_gain = pow(10., (-30+randf(&gains_rng, 40.f)+randf(&gains_rng, 15.f))/20.);
+    fgnoise_gain = pow(10., (-30+randf(&gains_rng, 40.f)+randf(&gains_rng, 15.f))/20.);
+    if (rng_bounded(&gains_rng, 8)==0) noise_gain = 0;
+    if (rng_bounded(&gains_rng, 8)!=0) fgnoise_gain = 0;
     if (disable_foreground) fgnoise_gain = 0;
-    if (rand()%12==0) {
+    if (rng_bounded(&gains_rng, 12)==0) {
       noise_gain *= 0.03;
       fgnoise_gain *= 0.03;
     }
     noise_gain *= speech_gain;
     fgnoise_gain *= speech_gain;
-    rand_resp(a_noise, b_noise);
-    rand_resp(a_fgnoise, b_fgnoise);
-    rand_resp(a_sig, b_sig);
-    lowpass = FREQ_SIZE * 3000./24000. * pow(50., rand()/(double)RAND_MAX);
+    rand_resp(&filters_rng, a_noise, b_noise);
+    rand_resp(&filters_rng, a_fgnoise, b_fgnoise);
+    rand_resp(&filters_rng, a_sig, b_sig);
+    lowpass = FREQ_SIZE * 3000./24000. * pow(50., rng_unit(&lowpass_rng));
+    band_lp = NB_BANDS;
     for (i=0;i<NB_BANDS;i++) {
       if (eband20ms[i] > lowpass) {
         band_lp = i;
@@ -482,18 +536,18 @@ int main(int argc, char **argv) {
       fn[j] *= fgnoise_gain;
       xn[j] = x[j] + n[j] + fn[j];
     }
-    if (rir_filename && rand()%2==0) {
-      rir_id = rand()%rirs.nb_rirs;
+    if (rir_filename && rng_bounded(&rir_rng, 2)==0) {
+      rir_id = rng_bounded(&rir_rng, rirs.nb_rirs);
       rir_filter_sequence(&rirs, x, rir_id, 1);
       rir_filter_sequence(&rirs, xn, rir_id, 0);
     }
-    if (rand()%4==0) {
+    if (rng_bounded(&clipping_rng, 4)==0) {
       /* Apply input clipping to 0 dBFS (don't clip target). */
       for (j=0;j<SEQUENCE_SAMPLES;j++) {
         xn[j] = MIN16(32767.f, MAX16(-32767.f, xn[j]));
       }
     }
-    if (rand()%2==0) {
+    if (rng_bounded(&quantize_rng, 2)==0) {
       /* Apply 16-bit quantization. */
       for (j=0;j<SEQUENCE_SAMPLES;j++) {
         xn[j] = floor(.5f + xn[j]);
@@ -531,5 +585,7 @@ int main(int argc, char **argv) {
   fclose(f2);
   fclose(f3);
   fclose(fout);
+  if (st) rnnoise_destroy(st);
+  if (noisy) rnnoise_destroy(noisy);
   return 0;
 }

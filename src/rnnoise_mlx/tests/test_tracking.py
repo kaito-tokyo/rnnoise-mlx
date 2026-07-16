@@ -43,6 +43,13 @@ def _mock_mlflow(monkeypatch, *, experiment_id="experiment-1"):
         "log_params",
         lambda params: calls.append(("log_params", params)),
     )
+    monkeypatch.setattr(
+        tracking.mlflow,
+        "log_artifact",
+        lambda local, artifact_path: calls.append(
+            ("log_artifact", local, artifact_path)
+        ),
+    )
     monkeypatch.setattr(tracking.atexit, "register", lambda fn: None)
     return calls
 
@@ -66,6 +73,11 @@ def test_tracker_reuses_existing_run_and_retains_name(tmp_path, monkeypatch):
     assert tracker.run_id == "run-123"
     assert ("start_run", {"run_id": "run-123"}) in calls
     assert ("log_params", {"resume_from": str(tmp_path / "checkpoint")}) in calls
+    assert (
+        "log_artifact",
+        str(tmp_path / "run-config.json"),
+        "provenance",
+    ) in calls
 
 
 def test_validate_tracking_target_does_not_start_or_update_run(monkeypatch):

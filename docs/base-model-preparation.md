@@ -116,6 +116,37 @@ pipeline, not release audio quality. Retrain promising configurations with
 segment length 500 and at least 10,000 updates, then run fixed-WAV listening
 tests.
 
+Feature generation writes `train.manifest.json` and `eval.manifest.json` next
+to the bulk `.f32` files. Training uploads these manifests, `run-config.json`,
+`model-config.json`, `training.json`, the final SafeTensors model, and every
+complete resumable checkpoint to MLflow. Bulk feature and corpus files remain
+in the shared dataset store. Pass additional small selection or mix manifests
+with repeated `--provenance-artifact PATH` options; files larger than 16 MiB
+are rejected to prevent accidental corpus uploads.
+
+Feature augmentation uses `splitmix64-domain-v1`. Random values are derived
+from the global seed, absolute sequence index, domain, and a domain-local
+counter. The fixed domains are: input offsets (1), speech start (2), gains and
+mute choices (3), response filters (4), low-pass cutoff (5), RIR selection
+(6), clipping (7), and quantization (8). `-sequence_start` therefore permits
+parallel or resumed generation without changing any sequence bytes.
+
+Publish completed files into the immutable shared store only after generation:
+
+```sh
+python -m rnnoise_mlx.tools.feature_store publish train.f32 \
+  /Users/umireon/Datasets/rnnoise-mlx-features/v1/train/generation-000 \
+  --sequence-count 10000
+python -m rnnoise_mlx.tools.feature_store verify \
+  /Users/umireon/Datasets/rnnoise-mlx-features/v1/train/generation-000
+```
+
+Publishing takes a per-generation lock, verifies size and SHA-256 in a
+temporary directory, atomically renames it into place, and rebuilds
+`v1/index.json`. The immutable generation ID is derived from the feature
+SHA-256; seed and sequence metadata come from the required adjacent generation
+manifest. Re-publishing the same valid generation reuses it.
+
 ## Provenance checklist
 
 - Archive filenames and SHA-256 values

@@ -6,6 +6,7 @@ import mlx.optimizers as optim
 from mlx.utils import tree_flatten
 
 from rnnoise_mlx.training.checkpoint import load_checkpoint, save_checkpoint
+from rnnoise_mlx.training.train import _feature_manifest
 from rnnoise_mlx.training.model import ModelConfig, RNNoise
 from rnnoise_mlx.training.tracking import MLflowTracker
 
@@ -238,3 +239,44 @@ def test_mlflow_uploads_checkpoint_under_immutable_update_path(tmp_path, monkeyp
         ("checkpoint_uploaded_update", 500.0),
         {"step": 500},
     )
+
+
+def test_mlflow_uploads_small_provenance_artifacts(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "rnnoise_mlx.training.tracking.mlflow.log_artifact",
+        lambda local, artifact_path: calls.append((local, artifact_path)),
+    )
+    manifest = tmp_path / "train.manifest.json"
+    manifest.write_text("{}\n")
+    tracker = object.__new__(MLflowTracker)
+    tracker.log_provenance_artifacts([manifest, manifest])
+    assert calls == [(str(manifest.resolve()), "provenance/data/000")]
+
+
+def test_mlflow_rejects_bulk_provenance_artifact(tmp_path):
+    feature = tmp_path / "train.f32"
+    feature.write_bytes(b"x" * (16 * 1024 * 1024 + 1))
+    tracker = object.__new__(MLflowTracker)
+    try:
+        tracker.log_provenance_artifacts([feature])
+    except ValueError as error:
+        assert "exceeds 16 MiB" in str(error)
+    else:
+        raise AssertionError("bulk feature artifact was accepted as provenance")
+
+
+def test_feature_manifest_supports_generated_and_store_layouts(tmp_path):
+    generated = tmp_path / "train.f32"
+    generated.write_bytes(b"")
+    generated_manifest = tmp_path / "train.manifest.json"
+    generated_manifest.write_text("{}\n")
+    assert _feature_manifest(generated) == generated_manifest
+
+    store = tmp_path / "generation-000"
+    store.mkdir()
+    stored_features = store / "features.f32"
+    stored_features.write_bytes(b"")
+    store_manifest = store / "manifest.json"
+    store_manifest.write_text("{}\n")
+    assert _feature_manifest(stored_features) == store_manifest
