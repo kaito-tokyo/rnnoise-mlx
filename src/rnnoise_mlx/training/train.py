@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from functools import partial
 import json
 from pathlib import Path
@@ -20,6 +21,12 @@ from .evaluate import evaluate
 from .loss import rnnoise_loss, rnnoise_loss_aligned
 from .model import ModelConfig, RNNoise
 from .tracking import MLflowTracker, validate_tracking_target
+
+
+def _feature_manifest(path: str | Path) -> Path | None:
+    feature = Path(path)
+    candidates = (feature.with_suffix(".manifest.json"), feature.parent / "manifest.json")
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 
 def main():
@@ -70,6 +77,16 @@ def main():
     )
     parser.add_argument("--checkpoint-every", type=int, default=32)
     parser.add_argument(
+        "--provenance-artifact",
+        action="append",
+        type=Path,
+        default=[],
+        help=(
+            "small data-selection manifest or configuration to upload to MLflow; "
+            "repeat for multiple files"
+        ),
+    )
+    parser.add_argument(
         "--resume-from",
         type=Path,
         help="complete checkpoint directory to resume from",
@@ -95,9 +112,19 @@ def main():
     validate_tracking_target(
         args.mlflow_tracking_uri, args.mlflow_experiment, args.mlflow_run_id
     )
+    provenance_artifacts = list(args.provenance_artifact)
+    for feature_path in (Path(args.features), args.eval_features):
+        if feature_path is None:
+            continue
+        manifest = _feature_manifest(feature_path)
+        if manifest is not None:
+            provenance_artifacts.append(manifest)
     dataset = FeatureDataset(args.features, args.sequence_length)
     mx.random.seed(args.seed)
     config = ModelConfig()
+    (output / "model-config.json").write_text(
+        json.dumps(asdict(config), indent=2, sort_keys=True) + "\n"
+    )
     model = RNNoise(config)
     learning_rate = lambda step: args.learning_rate / (1 + args.lr_decay * step)
     optimizer = optim.AdamW(learning_rate=learning_rate, betas=(0.8, 0.98), eps=1e-8)
@@ -128,6 +155,7 @@ def main():
         args.mlflow_run_id,
         output.resolve(),
         vars(args),
+        provenance_artifacts,
     )
     print(json.dumps({"mlflow_run_id": tracker.run_id}), flush=True)
     eval_dataset = FeatureDataset(args.eval_features, args.sequence_length) if args.eval_features else None

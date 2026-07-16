@@ -3,12 +3,26 @@
 from __future__ import annotations
 
 import atexit
+import json
 from pathlib import Path
 import subprocess
 from typing import Any
 
 import mlflow
 from mlflow.tracking import MlflowClient
+
+
+MAX_PROVENANCE_ARTIFACT_BYTES = 16 * 1024 * 1024
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    return value
 
 
 def _flatten_metrics(prefix: str, values: dict[str, Any] | None) -> dict[str, float]:
@@ -68,6 +82,7 @@ class MLflowTracker:
         run_id: str | None,
         output: Path,
         parameters: dict[str, Any],
+        provenance_artifacts: list[Path] | None = None,
     ) -> None:
         # Fail before evaluation or training if the server cannot be reached.
         existing_run = validate_tracking_target(tracking_uri, experiment, run_id)
@@ -83,11 +98,9 @@ class MLflowTracker:
             self.run = mlflow.start_run(run_id=run_id)
             mlflow.set_tags({**tags, "resumed": "true"})
         self.closed = False
-        normalized = {
-            key: str(value) if isinstance(value, Path) or value is None else value
-            for key, value in parameters.items()
-            if key != "mlflow_run_id"
-        }
+        normalized = _json_value(
+            {key: value for key, value in parameters.items() if key != "mlflow_run_id"}
+        )
         if run_id is None:
             mlflow.log_params(normalized)
         else:
@@ -102,6 +115,10 @@ class MLflowTracker:
                 }
             )
         atexit.register(self.fail_if_open)
+        run_config = output / "run-config.json"
+        run_config.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n")
+        mlflow.log_artifact(str(run_config), artifact_path="provenance")
+        self.log_provenance_artifacts(provenance_artifacts or [])
 
     @property
     def run_id(self) -> str:
@@ -139,6 +156,25 @@ class MLflowTracker:
         )
         mlflow.log_metric("checkpoint_uploaded_update", float(update), step=update)
 
+    def log_provenance_artifacts(self, artifacts: list[Path]) -> None:
+        """Upload small manifests/configuration, never bulk feature or corpus data."""
+        seen: set[Path] = set()
+        for index, artifact in enumerate(artifacts):
+            artifact = artifact.resolve()
+            if artifact in seen:
+                continue
+            seen.add(artifact)
+            if not artifact.is_file():
+                raise ValueError(f"provenance artifact is not a file: {artifact}")
+            size = artifact.stat().st_size
+            if size > MAX_PROVENANCE_ARTIFACT_BYTES:
+                raise ValueError(
+                    f"provenance artifact exceeds 16 MiB: {artifact} ({size} bytes)"
+                )
+            mlflow.log_artifact(
+                str(artifact), artifact_path=f"provenance/data/{index:03d}"
+            )
+
     def complete(self, summary: dict[str, Any], output: Path) -> None:
         update = int(summary["updates"])
         self.log_evaluation("trained", summary.get("trained_evaluation"), update)
@@ -154,6 +190,7 @@ class MLflowTracker:
             step=update,
         )
         mlflow.log_artifact(str(output / "model.safetensors"), artifact_path="model")
+        mlflow.log_artifact(str(output / "model-config.json"), artifact_path="model")
         mlflow.log_artifact(str(output / "training.json"), artifact_path="model")
         mlflow.end_run(status="FINISHED")
         self.closed = True

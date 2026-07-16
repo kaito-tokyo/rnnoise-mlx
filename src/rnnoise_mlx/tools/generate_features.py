@@ -3,12 +3,39 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 import time
 
 
 BYTES_PER_SEQUENCE = 2000 * 98 * 4
+RNG_ALGORITHM = "splitmix64-domain-v1"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _input_record(path: Path) -> dict[str, object]:
+    return {
+        "path": str(path.resolve()),
+        "bytes": path.stat().st_size,
+        "sha256": _sha256(path),
+    }
+
+
+def _rir_records(list_path: Path) -> list[dict[str, object]]:
+    records = []
+    for line in list_path.read_text().splitlines():
+        if line:
+            records.append(_input_record(Path(line)))
+    return records
 
 
 def generate(
@@ -20,15 +47,23 @@ def generate(
     speech_offsets: Path | None = None,
     progress_interval: float = 10.0,
     disable_foreground: bool = False,
+    seed: int = 0,
+    sequence_start: int = 0,
+    speech_offset_start: int = 0,
 ) -> None:
     destination = output / f"{split}.f32"
     options = []
     if speech_offsets is not None:
-        options = ["-speech_offsets", str(speech_offsets)]
+        options = [
+            "-speech_offsets", str(speech_offsets),
+            "-speech_offset_start", str(speech_offset_start),
+        ]
     if disable_foreground:
         options.append("-disable_foreground")
     command = [
         str(dump_features),
+        "-seed", str(seed),
+        "-sequence_start", str(sequence_start),
         "-rir_list",
         str(prepared / f"{split}_rir_list.txt"),
         *options,
@@ -70,7 +105,50 @@ def generate(
         raise SystemExit(
             f"unexpected size for {destination}: {actual}, expected {expected}"
         )
+    input_paths = {
+            "speech": prepared / f"{split}_speech.pcm",
+            "background": prepared / f"{split}_background.pcm",
+            "foreground": prepared / f"{split}_foreground.pcm",
+            "rir_list": prepared / f"{split}_rir_list.txt",
+    }
+    inputs = {name: _input_record(path) for name, path in input_paths.items()}
+    inputs["rir_list"]["entries"] = _rir_records(input_paths["rir_list"])
+    manifest = {
+        "format_version": 1,
+        "kind": "rnnoise-training-features",
+        "split": split,
+        "sequence_count": count,
+        "frames_per_sequence": 2000,
+        "values_per_frame": 98,
+        "output": {
+            "filename": destination.name,
+            "bytes": actual,
+            "sha256": _sha256(destination),
+        },
+        "generator": {
+            "path": str(dump_features),
+            "sha256": _sha256(dump_features),
+            "disable_foreground": disable_foreground,
+            "rng_algorithm": RNG_ALGORITHM,
+            "seed": seed,
+            "sequence_start": sequence_start,
+            "speech_offset_start": speech_offset_start,
+        },
+        "inputs": inputs,
+        "speech_offsets": (
+            {
+                "path": str(speech_offsets.resolve()),
+                "bytes": speech_offsets.stat().st_size,
+                "sha256": _sha256(speech_offsets),
+            }
+            if speech_offsets is not None
+            else None
+        ),
+    }
+    manifest_path = destination.with_suffix(".manifest.json")
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"verified {destination}: {actual} bytes")
+    print(f"wrote provenance manifest: {manifest_path}")
 
 
 def main() -> None:
@@ -80,6 +158,14 @@ def main() -> None:
     parser.add_argument("output", type=Path)
     parser.add_argument("--train-count", type=int, default=10_000)
     parser.add_argument("--eval-count", type=int, default=500)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--generation", type=int, default=0)
+    parser.add_argument(
+        "--speech-offset-start",
+        type=int,
+        default=0,
+        help="first line to consume from each speech offset manifest",
+    )
     parser.add_argument(
         "--progress-interval",
         type=float,
@@ -115,12 +201,18 @@ def main() -> None:
         offsets / "train.txt" if offsets else None,
         args.progress_interval,
         args.disable_foreground,
+        args.seed,
+        args.generation * args.train_count,
+        args.speech_offset_start,
     )
     generate(
         dump_features, prepared, output, "eval", args.eval_count,
         offsets / "eval.txt" if offsets else None,
         args.progress_interval,
         args.disable_foreground,
+        args.seed,
+        0,
+        0,
     )
 
 
