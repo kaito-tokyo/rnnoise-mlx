@@ -158,7 +158,11 @@ def main():
         provenance_artifacts,
     )
     print(json.dumps({"mlflow_run_id": tracker.run_id}), flush=True)
+    (output / "mlflow-run.json").write_text(
+        json.dumps({"run_id": tracker.run_id}, indent=2) + "\n"
+    )
     eval_dataset = FeatureDataset(args.eval_features, args.sequence_length) if args.eval_features else None
+    initial_evaluation = None
     if args.resume_from is None:
         initial_evaluation = (
             evaluate(model, eval_dataset, args.batch_size, args.gamma)

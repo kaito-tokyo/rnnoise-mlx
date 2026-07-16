@@ -134,7 +134,6 @@ def load_checkpoint(
     saved_config = manifest.get("training_config", {})
     current_config = _json_value(training_config)
     compatible_keys = (
-        "features",
         "batch_size",
         "sequence_length",
         "learning_rate",
@@ -143,7 +142,6 @@ def load_checkpoint(
         "training_chunk_length",
         "stateful_tbptt",
         "two_segment_tbptt",
-        "segmented_tbptt_length",
         "segmented_tbptt_state",
         "equalize_reset_targets",
     )

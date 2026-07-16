@@ -1,7 +1,8 @@
 # Preparing data for a base model
 
-This procedure generates RNNoise training features from LibriTTS-R, MUSAN, and
-RIRS_NOISES without using upstream weights or outputs. Original archives remain
+This procedure generates RNNoise training features from LibriTTS-R and
+RIRS_NOISES plus the curated DNS/MKA/Multi-Pressure mixture documented in
+[`noise-mix-dataset.md`](noise-mix-dataset.md). Original archives remain
 unchanged; extracted and generated files are stored under `data/`.
 
 ## 1. Extract the archives
@@ -15,7 +16,10 @@ data/corpus/
   LibriTTS_R/train-clean-360/
   LibriTTS_R/dev-clean/
   LibriTTS_R/test-clean/
-  musan/{noise,music,speech}/
+  musan/noise/                 # only the automatically curated background subset
+  DNS5/
+  MKA/
+  multi_pressure_keyboard/
   RIRS_NOISES/
 ```
 

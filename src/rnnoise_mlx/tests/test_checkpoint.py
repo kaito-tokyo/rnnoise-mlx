@@ -169,6 +169,45 @@ def test_checkpoint_rejects_incompatible_training_configuration(tmp_path):
         raise AssertionError("incompatible checkpoint was accepted")
 
 
+def test_checkpoint_allows_feature_and_tbptt_chapter_changes(tmp_path):
+    config, model, optimizer = _updated_model_and_optimizer()
+    parameters = {
+        "features": "generation-0/train.f32",
+        "batch_size": 2,
+        "sequence_length": 10,
+        "segmented_tbptt_length": 250,
+        "segmented_tbptt_state": "carry",
+    }
+    checkpoint = save_checkpoint(
+        tmp_path,
+        model,
+        optimizer,
+        config,
+        update=5_000,
+        next_epoch=5,
+        next_batch=0,
+        processed_frames=100_000,
+        elapsed_seconds=1.0,
+        history=[],
+        training_config=parameters,
+    )
+    changed_chapter = dict(
+        parameters,
+        features="generation-1/train.f32",
+        segmented_tbptt_length=500,
+    )
+
+    state = load_checkpoint(
+        checkpoint,
+        RNNoise(config),
+        optim.AdamW(learning_rate=1e-3),
+        config,
+        changed_chapter,
+    )
+
+    assert state["update"] == 5_000
+
+
 def test_checkpoint_manifest_is_json_serializable_with_paths(tmp_path):
     config, model, optimizer = _updated_model_and_optimizer()
     checkpoint = save_checkpoint(

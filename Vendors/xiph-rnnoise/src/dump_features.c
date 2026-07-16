@@ -324,6 +324,7 @@ int main(int argc, char **argv) {
   FILE *f1, *f2, *f3, *fout;
   FILE *speech_offsets = NULL;
   int disable_foreground = 0;
+  int foreground_probability_denominator = 8;
   long speech_length, noise_length, fgnoise_length;
   int maxCount;
   uint64_t seed = 0;
@@ -354,6 +355,15 @@ int main(int argc, char **argv) {
       argv++;
       argc--;
     }
+    else if (strcmp(argv[1], "-foreground_probability_denominator")==0) {
+      foreground_probability_denominator = atoi(argv[2]);
+      if (foreground_probability_denominator < 1) {
+        fprintf(stderr, "foreground probability denominator must be at least 1\n");
+        return 1;
+      }
+      argv+=2;
+      argc-=2;
+    }
     else if (strcmp(argv[1], "-seed")==0) {
       seed = strtoull(argv[2], NULL, 0);
       argv+=2;
@@ -374,7 +384,7 @@ int main(int argc, char **argv) {
     }
   }
   if (argc!=6) {
-    fprintf(stderr, "usage: %s [-rir_list list] [-speech_offsets offsets] [-speech_offset_start index] [-disable_foreground] [-seed seed] [-sequence_start index] <speech> <noise> <fg_noise> <output> <count>\n", argv0);
+    fprintf(stderr, "usage: %s [-rir_list list] [-speech_offsets offsets] [-speech_offset_start index] [-disable_foreground] [-foreground_probability_denominator N] [-seed seed] [-sequence_start index] <speech> <noise> <fg_noise> <output> <count>\n", argv0);
     return 1;
   }
   f1 = fopen(argv[1], "rb");
@@ -475,7 +485,7 @@ int main(int argc, char **argv) {
     noise_gain = pow(10., (-30+randf(&gains_rng, 40.f)+randf(&gains_rng, 15.f))/20.);
     fgnoise_gain = pow(10., (-30+randf(&gains_rng, 40.f)+randf(&gains_rng, 15.f))/20.);
     if (rng_bounded(&gains_rng, 8)==0) noise_gain = 0;
-    if (rng_bounded(&gains_rng, 8)!=0) fgnoise_gain = 0;
+    if (rng_bounded(&gains_rng, foreground_probability_denominator)!=0) fgnoise_gain = 0;
     if (disable_foreground) fgnoise_gain = 0;
     if (rng_bounded(&gains_rng, 12)==0) {
       noise_gain *= 0.03;
