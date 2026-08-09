@@ -1,4 +1,5 @@
 import hashlib
+import json
 import wave
 from pathlib import Path
 
@@ -265,3 +266,64 @@ def test_render_requires_one_complete_feature_sequence_per_split(tmp_path):
         assert "20-second" in str(error)
     else:
         raise AssertionError("short evaluation render was accepted")
+
+
+def test_render_keeps_existing_outputs_when_staging_fails(tmp_path, monkeypatch):
+    records = []
+    categories = {
+        "dns_typing", "dns_door", "dns_squeak", "dns_dragging",
+        "dns_copy-machine", "dns_human", "mka", "multi_pressure",
+        "dns_fan", "musan_curated",
+    }
+    for split in ("train", "eval"):
+        for category in categories:
+            path = tmp_path / f"{split}-{category}.wav"
+            path.write_bytes(b"source")
+            records.append({
+                "accepted": True,
+                "split": split,
+                "category": category,
+                "source": category,
+                "identity": f"{split}-{category}",
+                "path": str(path),
+                "relative_path": path.name,
+                "sha256": "ok",
+            })
+        for pressure in PRESSURES:
+            path = tmp_path / f"{split}-{pressure}.wav"
+            path.write_bytes(b"source")
+            records.append({
+                "accepted": True,
+                "split": split,
+                "category": "multi_pressure",
+                "source": f"multi-pressure-{pressure.lower()}",
+                "identity": f"{split}-{pressure}",
+                "path": str(path),
+                "relative_path": path.name,
+                "sha256": "ok",
+            })
+    audit = tmp_path / "audit.json"
+    audit.write_text(json.dumps({"records": records}) + "\n")
+    output = tmp_path / "output"
+    output.mkdir()
+    existing = output / "train_background.pcm"
+    existing.write_bytes(b"previous-valid-output")
+    monkeypatch.setattr("rnnoise_mlx.tools.prepare_noise_mix.RATE", 1)
+    monkeypatch.setattr("rnnoise_mlx.tools.prepare_noise_mix.SEQUENCE_SAMPLES", 1)
+    monkeypatch.setattr(
+        "rnnoise_mlx.tools.prepare_noise_mix.sha256_file", lambda path: "ok"
+    )
+
+    def decode(path):
+        if path.name == "train-HighP.wav":
+            raise ValueError("decode failed")
+        return np.ones(2, dtype="<i2")
+
+    monkeypatch.setattr("rnnoise_mlx.tools.prepare_noise_mix.decode_48k", decode)
+    try:
+        render(audit, output, 1 / 3600, 1 / 3600)
+    except ValueError as error:
+        assert "decode failed" in str(error)
+    else:
+        raise AssertionError("failed render unexpectedly succeeded")
+    assert existing.read_bytes() == b"previous-valid-output"

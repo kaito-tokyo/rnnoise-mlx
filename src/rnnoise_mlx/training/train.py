@@ -16,7 +16,7 @@ import mlx.optimizers as optim
 import numpy as np
 
 from .data import FeatureDataset
-from .checkpoint import load_checkpoint, save_checkpoint
+from .checkpoint import _feature_identity, load_checkpoint, save_checkpoint
 from .evaluate import evaluate
 from .loss import rnnoise_loss, rnnoise_loss_aligned
 from .model import ModelConfig, RNNoise
@@ -132,6 +132,10 @@ def main():
         manifest = _feature_manifest(feature_path)
         if manifest is not None:
             provenance_artifacts.append(manifest)
+    verified_feature_identity = _feature_identity(vars(args))
+    verified_evaluation_feature_identity = _feature_identity(
+        vars(args), "eval_features"
+    )
     dataset = FeatureDataset(args.features, args.sequence_length)
     mx.random.seed(args.seed)
     config = ModelConfig()
@@ -150,7 +154,13 @@ def main():
     initial_evaluation = None
     if args.resume_from:
         restored = load_checkpoint(
-            args.resume_from.resolve(), model, optimizer, config, vars(args)
+            args.resume_from.resolve(),
+            model,
+            optimizer,
+            config,
+            vars(args),
+            feature_identity=verified_feature_identity,
+            evaluation_feature_identity=verified_evaluation_feature_identity,
         )
         history = restored["history"]
         update = int(restored["update"])
@@ -429,6 +439,8 @@ def main():
                     history=history,
                     training_config=vars(args),
                     initial_evaluation=initial_evaluation,
+                    feature_identity=verified_feature_identity,
+                    evaluation_feature_identity=verified_evaluation_feature_identity,
                 )
                 tracker.log_checkpoint(checkpoint, update)
                 checkpoint_due = False

@@ -17,6 +17,7 @@ from .model import ModelConfig, RNNoise
 
 
 FORMAT_VERSION = 1
+_AUTO_IDENTITY = object()
 
 
 def _flat_state(state: Any) -> dict[str, mx.array]:
@@ -82,6 +83,8 @@ def save_checkpoint(
     history: list[dict[str, Any]],
     training_config: dict[str, Any],
     initial_evaluation: dict[str, Any] | None = None,
+    feature_identity: str | None | object = _AUTO_IDENTITY,
+    evaluation_feature_identity: str | None | object = _AUTO_IDENTITY,
 ) -> Path:
     """Atomically write a complete checkpoint and return its final directory."""
     mx.eval(model.state, optimizer.state, mx.random.state)
@@ -119,14 +122,18 @@ def save_checkpoint(
             for path in temporary.iterdir()
             if path.is_file()
         }
+        if feature_identity is _AUTO_IDENTITY:
+            feature_identity = _feature_identity(training_config)
+        if evaluation_feature_identity is _AUTO_IDENTITY:
+            evaluation_feature_identity = _feature_identity(
+                training_config, "eval_features"
+            )
         manifest = {
             "format_version": FORMAT_VERSION,
             "model_config": asdict(config),
             "training_config": _json_value(training_config),
-            "feature_identity": _feature_identity(training_config),
-            "evaluation_feature_identity": _feature_identity(
-                training_config, "eval_features"
-            ),
+            "feature_identity": feature_identity,
+            "evaluation_feature_identity": evaluation_feature_identity,
             "files": files,
         }
         (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -145,6 +152,8 @@ def load_checkpoint(
     optimizer: Any,
     config: ModelConfig,
     training_config: dict[str, Any],
+    feature_identity: str | None | object = _AUTO_IDENTITY,
+    evaluation_feature_identity: str | None | object = _AUTO_IDENTITY,
 ) -> dict[str, Any]:
     """Restore model, optimizer, RNG, and trainer cursor from a checkpoint."""
     manifest = json.loads((checkpoint / "manifest.json").read_text())
@@ -185,7 +194,11 @@ def load_checkpoint(
     if mismatches:
         raise ValueError(f"checkpoint training configuration differs: {', '.join(mismatches)}")
     saved_eval_identity = manifest.get("evaluation_feature_identity")
-    current_eval_identity = _feature_identity(training_config, "eval_features")
+    if evaluation_feature_identity is _AUTO_IDENTITY:
+        evaluation_feature_identity = _feature_identity(
+            training_config, "eval_features"
+        )
+    current_eval_identity = evaluation_feature_identity
     saved_eval_path = saved_config.get("eval_features")
     current_eval_path = current_config.get("eval_features")
     if saved_eval_identity is None:
@@ -207,7 +220,9 @@ def load_checkpoint(
     if state.get("format_version") != FORMAT_VERSION:
         raise ValueError("trainer state format does not match")
     saved_feature_identity = manifest.get("feature_identity")
-    current_feature_identity = _feature_identity(training_config)
+    if feature_identity is _AUTO_IDENTITY:
+        feature_identity = _feature_identity(training_config)
+    current_feature_identity = feature_identity
     if (
         saved_feature_identity is None
         or current_feature_identity is None

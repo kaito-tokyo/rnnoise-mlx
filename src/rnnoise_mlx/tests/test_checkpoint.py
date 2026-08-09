@@ -78,6 +78,8 @@ def test_complete_checkpoint_round_trip(tmp_path):
         history=[{"update": 32, "epoch": 1, "loss": 0.25}],
         training_config=parameters,
         initial_evaluation={"loss": 0.75},
+        feature_identity=hashlib.sha256(b"features").hexdigest(),
+        evaluation_feature_identity=None,
     )
 
     restored_model = RNNoise(config)
@@ -92,6 +94,8 @@ def test_complete_checkpoint_round_trip(tmp_path):
     assert state["next_epoch"] == 2
     assert state["next_batch"] == 7
     assert state["initial_evaluation"] == {"loss": 0.75}
+    manifest = json.loads((checkpoint / "manifest.json").read_text())
+    assert manifest["feature_identity"] == hashlib.sha256(b"features").hexdigest()
     assert {path.name for path in checkpoint.iterdir()} == {
         "manifest.json",
         "mlx-random-state.safetensors",

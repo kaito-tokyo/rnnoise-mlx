@@ -18,6 +18,14 @@ SNRS = (-5, 0, 5, 10, 20)
 SAMPLES = 5 * RATE
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def stable(path: str) -> bytes:
     return hashlib.sha256(f"141:evaluation:{path}".encode()).digest()
 
@@ -51,12 +59,18 @@ def write_wav(path: Path, audio: np.ndarray) -> None:
 
 
 def output_record(path: Path) -> dict[str, Any]:
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return {
         "path": str(path.resolve()),
         "bytes": path.stat().st_size,
-        "sha256": digest,
+        "sha256": sha256_file(path),
     }
+
+
+def decode_audited(record: dict[str, Any]) -> np.ndarray:
+    path = Path(record["path"])
+    if sha256_file(path) != record["sha256"]:
+        raise ValueError(f"audited source checksum differs: {path}")
+    return decode(path)
 
 
 def mix_at_snr(clean: np.ndarray, noise: np.ndarray, snr_db: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -106,7 +120,7 @@ def build(audit_path: Path, clean_path: Path, output: Path) -> dict[str, Any]:
     groups = evaluation_groups(report)
     cases = []
     for group, record in sorted(groups.items()):
-        noise = decode(Path(record["path"]))
+        noise = decode_audited(record)
         for snr in SNRS:
             clean_scaled, noise_scaled, mixture = mix_at_snr(clean, noise, snr)
             stem = f"{group}__snr-{snr:+d}"

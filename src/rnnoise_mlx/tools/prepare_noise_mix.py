@@ -6,9 +6,11 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import random
 import re
 import subprocess
+import tempfile
 import wave
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -446,45 +448,58 @@ def render(audit_path: Path, output: Path, train_hours: float, eval_hours: float
     accepted = [row for row in report["records"] if row["accepted"]]
     validate_render_splits(accepted)
     manifests: dict[str, Any] = {}
-    for split, hours in (("train", train_hours), ("eval", eval_hours)):
-        rows = [row for row in accepted if row["split"] == split]
-        by_category: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in rows:
-            by_category[row["category"]].append(row)
-        for category in by_category:
-            by_category[category].sort(key=lambda row: stable_score(row["identity"], f"render-{split}-{category}"))
-        total_samples = round(hours * 3600 * RATE)
-        split_manifest: dict[str, Any] = {"hours": hours, "files": {}}
-        for kind, weights in (("background", BACKGROUND_WEIGHTS), ("foreground", FOREGROUND_WEIGHTS)):
-            allocations = _allocate(total_samples, weights)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".noise-mix-render-", dir=output.parent
+    ) as temporary_directory:
+        staging = Path(temporary_directory)
+        staged_files = []
+        for split, hours in (("train", train_hours), ("eval", eval_hours)):
+            rows = [row for row in accepted if row["split"] == split]
+            by_category: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in rows:
+                by_category[row["category"]].append(row)
+            for category in by_category:
+                by_category[category].sort(key=lambda row: stable_score(row["identity"], f"render-{split}-{category}"))
+            total_samples = round(hours * 3600 * RATE)
+            split_manifest: dict[str, Any] = {"hours": hours, "files": {}}
+            for kind, weights in (("background", BACKGROUND_WEIGHTS), ("foreground", FOREGROUND_WEIGHTS)):
+                allocations = _allocate(total_samples, weights)
 
-            def chunks():
-                for category, count in allocations.items():
-                    category_rows = by_category[category]
-                    if category == "multi_pressure":
-                        yield from _multi_pressure_chunks(category_rows, count, split)
-                    else:
-                        yield from _cycle_chunks(category_rows, count)
-            target = output / f"{split}_{kind}.pcm"
-            used_records = _write_pcm(target, chunks())
-            split_manifest["files"][kind] = {
-                "path": str(target.resolve()),
-                "bytes": target.stat().st_size,
-                "sha256": sha256_file(target),
-                "allocations_samples": allocations,
-                "source_files": used_records,
-            }
-        manifests[split] = split_manifest
-    result = {
-        "format_version": 1,
-        "kind": "rnnoise-mixed-noise-render",
-        "seed": SEED,
-        "audit": {"path": str(audit_path.resolve()), "sha256": sha256_file(audit_path)},
-        "decode_format": "pcm-s16le-48k-mono",
-        "splits": manifests,
-    }
-    output.mkdir(parents=True, exist_ok=True)
-    (output / "noise-mix-manifest.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+                def chunks():
+                    for category, count in allocations.items():
+                        category_rows = by_category[category]
+                        if category == "multi_pressure":
+                            yield from _multi_pressure_chunks(category_rows, count, split)
+                        else:
+                            yield from _cycle_chunks(category_rows, count)
+                filename = f"{split}_{kind}.pcm"
+                staged = staging / filename
+                target = output / filename
+                used_records = _write_pcm(staged, chunks())
+                staged_files.append((staged, target))
+                split_manifest["files"][kind] = {
+                    "path": str(target.resolve()),
+                    "bytes": staged.stat().st_size,
+                    "sha256": sha256_file(staged),
+                    "allocations_samples": allocations,
+                    "source_files": used_records,
+                }
+            manifests[split] = split_manifest
+        result = {
+            "format_version": 1,
+            "kind": "rnnoise-mixed-noise-render",
+            "seed": SEED,
+            "audit": {"path": str(audit_path.resolve()), "sha256": sha256_file(audit_path)},
+            "decode_format": "pcm-s16le-48k-mono",
+            "splits": manifests,
+        }
+        staged_manifest = staging / "noise-mix-manifest.json"
+        staged_manifest.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        output.mkdir(parents=True, exist_ok=True)
+        for staged, target in staged_files:
+            os.replace(staged, target)
+        os.replace(staged_manifest, output / "noise-mix-manifest.json")
     return result
 
 

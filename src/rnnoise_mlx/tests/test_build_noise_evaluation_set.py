@@ -3,6 +3,7 @@ import hashlib
 import numpy as np
 
 from rnnoise_mlx.tools.build_noise_evaluation_set import (
+    decode_audited,
     evaluation_groups,
     mix_at_snr,
     output_record,
@@ -87,3 +88,14 @@ def test_output_record_binds_evaluation_wav_bytes(tmp_path):
         "bytes": 9,
         "sha256": hashlib.sha256(b"wav-bytes").hexdigest(),
     }
+
+
+def test_decode_audited_rejects_changed_source(tmp_path):
+    path = tmp_path / "noise.wav"
+    path.write_bytes(b"changed")
+    try:
+        decode_audited({"path": str(path), "sha256": "old-digest"})
+    except ValueError as error:
+        assert "checksum differs" in str(error)
+    else:
+        raise AssertionError("changed audited source was accepted")
