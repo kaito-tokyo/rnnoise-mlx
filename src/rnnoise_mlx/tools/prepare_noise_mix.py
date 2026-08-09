@@ -231,29 +231,39 @@ def _apply_musan_cap(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def stratify_splits(records: list[dict[str, Any]]) -> None:
     """Apply a deterministic 90/10 identity split within every accepted category."""
     by_category: dict[str, set[str]] = defaultdict(set)
+    mka_by_source: dict[str, set[str]] = defaultdict(set)
     for record in records:
         if record["accepted"]:
-            stratum = (
-                record["source"]
-                if record["category"] == "mka"
-                else record["category"]
-            )
-            by_category[stratum].add(record["identity"])
+            if record["category"] == "mka":
+                mka_by_source[record["source"]].add(record["identity"])
+            else:
+                by_category[record["category"]].add(record["identity"])
     evaluation: dict[str, set[str]] = {}
     for category, identities in by_category.items():
         ordered = sorted(identities, key=lambda identity: stable_score(identity, f"split-{category}"))
         count = max(1, round(len(ordered) * 0.1))
         evaluation[category] = set(ordered[:count])
+    mka_identities = set().union(*mka_by_source.values()) if mka_by_source else set()
+    mka_evaluation: set[str] = set()
+    for source, identities in sorted(mka_by_source.items()):
+        ordered = sorted(
+            identities, key=lambda identity: stable_score(identity, f"split-{source}")
+        )
+        mka_evaluation.add(ordered[0])
+    target = max(1, round(len(mka_identities) * 0.1)) if mka_identities else 0
+    remaining = sorted(
+        mka_identities - mka_evaluation,
+        key=lambda identity: stable_score(identity, "split-mka"),
+    )
+    mka_evaluation.update(remaining[: max(0, target - len(mka_evaluation))])
     for record in records:
         if record["accepted"]:
-            stratum = (
-                record["source"]
+            selected = (
+                mka_evaluation
                 if record["category"] == "mka"
-                else record["category"]
+                else evaluation[record["category"]]
             )
-            record["split"] = (
-                "eval" if record["identity"] in evaluation[stratum] else "train"
-            )
+            record["split"] = "eval" if record["identity"] in selected else "train"
 
 
 def validate_splittable_categories(records: list[dict[str, Any]]) -> None:

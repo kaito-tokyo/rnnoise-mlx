@@ -1,4 +1,5 @@
 import hashlib
+import json
 
 import numpy as np
 
@@ -99,3 +100,57 @@ def test_decode_audited_rejects_changed_source(tmp_path):
         assert "checksum differs" in str(error)
     else:
         raise AssertionError("changed audited source was accepted")
+
+
+def test_build_keeps_existing_outputs_when_staging_fails(tmp_path, monkeypatch):
+    audit = tmp_path / "audit.json"
+    audit.write_text(json.dumps({"records": []}) + "\n")
+    clean = tmp_path / "clean.wav"
+    clean.write_bytes(b"clean")
+    first = {
+        "path": str(tmp_path / "first.wav"),
+        "sha256": "first",
+        "relative_path": "first.wav",
+        "identity": "first",
+    }
+    second = {
+        "path": str(tmp_path / "second.wav"),
+        "sha256": "second",
+        "relative_path": "second.wav",
+        "identity": "second",
+    }
+    output = tmp_path / "output"
+    output.mkdir()
+    existing = output / "first__snr-+0__mixture.wav"
+    existing.write_bytes(b"previous-valid-output")
+    monkeypatch.setattr(
+        "rnnoise_mlx.tools.build_noise_evaluation_set.evaluation_groups",
+        lambda report: {"first": first, "second": second},
+    )
+    monkeypatch.setattr(
+        "rnnoise_mlx.tools.build_noise_evaluation_set.SNRS", (0,)
+    )
+    monkeypatch.setattr(
+        "rnnoise_mlx.tools.build_noise_evaluation_set.decode",
+        lambda path: np.ones(10, dtype=np.float64),
+    )
+    calls = 0
+
+    def audited(record):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ValueError("audit failed")
+        return np.ones(10, dtype=np.float64)
+
+    monkeypatch.setattr(
+        "rnnoise_mlx.tools.build_noise_evaluation_set.decode_audited", audited
+    )
+    from rnnoise_mlx.tools.build_noise_evaluation_set import build
+    try:
+        build(audit, clean, output)
+    except ValueError as error:
+        assert "audit failed" in str(error)
+    else:
+        raise AssertionError("failed evaluation build unexpectedly succeeded")
+    assert existing.read_bytes() == b"previous-valid-output"

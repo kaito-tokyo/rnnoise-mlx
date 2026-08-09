@@ -31,7 +31,20 @@ tar -xzf /Users/umireon/Datasets/dev_clean.tar.gz -C data/corpus
 tar -xzf /Users/umireon/Datasets/test_clean.tar.gz -C data/corpus
 tar -xzf /Users/umireon/Datasets/musan.tar.gz -C data/corpus
 unzip -q /Users/umireon/Datasets/rirs_noises.zip -d data/corpus
+
+# Download these archives from the versioned official sources linked in
+# docs/noise-mix-dataset.md, then extract them into the required roots:
+unzip -q /path/to/dns5-freesound.zip -d data/corpus/DNS5
+unzip -q /path/to/mka-version-3.zip -d data/corpus/MKA
+unzip -q /path/to/multi-pressure-v8-dataset.zip \
+  -d data/corpus/multi_pressure_keyboard
 ```
+
+The extraction postcondition is that DNS WAVs exist below `DNS5/`, the MKA
+archive provides `MKA/MKA datasets/{Lenovo,MSI,Mac,Messenger,Zoom,hp}/`, and
+the Multi-Pressure archive provides
+`multi_pressure_keyboard/dataset/{HighP,MediumP,LowP}/`. Archive filenames may
+differ by download service; record their original names and SHA-256 values.
 
 ## 2. Create deterministic manifests and PCM streams
 

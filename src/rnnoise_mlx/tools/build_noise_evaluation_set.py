@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
+import tempfile
 import wave
 from pathlib import Path
 from typing import Any
@@ -119,43 +121,65 @@ def build(audit_path: Path, clean_path: Path, output: Path) -> dict[str, Any]:
     clean = decode(clean_path)
     groups = evaluation_groups(report)
     cases = []
-    for group, record in sorted(groups.items()):
-        noise = decode_audited(record)
-        for snr in SNRS:
-            clean_scaled, noise_scaled, mixture = mix_at_snr(clean, noise, snr)
-            stem = f"{group}__snr-{snr:+d}"
-            paths = {
-                "clean": output / f"{stem}__clean.wav",
-                "noise": output / f"{stem}__noise.wav",
-                "mixture": output / f"{stem}__mixture.wav",
-            }
-            write_wav(paths["clean"], clean_scaled)
-            write_wav(paths["noise"], noise_scaled)
-            write_wav(paths["mixture"], mixture)
-            cases.append({
-                "id": stem,
-                "group": group,
-                "snr_db": snr,
-                "source": record["relative_path"],
-                "source_identity": record["identity"],
-                "outputs": {name: output_record(path) for name, path in paths.items()},
-            })
-    clean_only = output / "clean-only.wav"
-    peak = np.max(np.abs(clean), initial=0)
-    write_wav(clean_only, clean * min(1.0, 0.99 / peak) if peak else clean)
-    manifest = {
-        "format_version": 1,
-        "kind": "rnnoise-fixed-noise-evaluation",
-        "sample_rate_hz": RATE,
-        "duration_seconds": SAMPLES / RATE,
-        "snrs_db": list(SNRS),
-        "audit": str(audit_path.resolve()),
-        "clean_source": str(clean_path.resolve()),
-        "clean_only": output_record(clean_only),
-        "cases": cases,
-    }
-    output.mkdir(parents=True, exist_ok=True)
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".noise-evaluation-", dir=output.parent
+    ) as temporary_directory:
+        staging = Path(temporary_directory)
+        staged_files = []
+        for group, record in sorted(groups.items()):
+            noise = decode_audited(record)
+            for snr in SNRS:
+                clean_scaled, noise_scaled, mixture = mix_at_snr(clean, noise, snr)
+                stem = f"{group}__snr-{snr:+d}"
+                staged_paths = {
+                    name: staging / f"{stem}__{name}.wav"
+                    for name in ("clean", "noise", "mixture")
+                }
+                write_wav(staged_paths["clean"], clean_scaled)
+                write_wav(staged_paths["noise"], noise_scaled)
+                write_wav(staged_paths["mixture"], mixture)
+                outputs = {}
+                for name, staged in staged_paths.items():
+                    target = output / staged.name
+                    staged_files.append((staged, target))
+                    outputs[name] = {**output_record(staged), "path": str(target.resolve())}
+                cases.append({
+                    "id": stem,
+                    "group": group,
+                    "snr_db": snr,
+                    "source": record["relative_path"],
+                    "source_identity": record["identity"],
+                    "outputs": outputs,
+                })
+        staged_clean_only = staging / "clean-only.wav"
+        peak = np.max(np.abs(clean), initial=0)
+        write_wav(staged_clean_only, clean * min(1.0, 0.99 / peak) if peak else clean)
+        clean_only = {
+            **output_record(staged_clean_only),
+            "path": str((output / "clean-only.wav").resolve()),
+        }
+        staged_files.append((staged_clean_only, output / "clean-only.wav"))
+        manifest = {
+            "format_version": 1,
+            "kind": "rnnoise-fixed-noise-evaluation",
+            "sample_rate_hz": RATE,
+            "duration_seconds": SAMPLES / RATE,
+            "snrs_db": list(SNRS),
+            "audit": {
+                "path": str(audit_path.resolve()),
+                "sha256": sha256_file(audit_path),
+            },
+            "clean_source": str(clean_path.resolve()),
+            "clean_only": clean_only,
+            "cases": cases,
+        }
+        staged_manifest = staging / "manifest.json"
+        staged_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        output.mkdir(parents=True, exist_ok=True)
+        for staged, target in staged_files:
+            os.replace(staged, target)
+        os.replace(staged_manifest, output / "manifest.json")
     return manifest
 
 

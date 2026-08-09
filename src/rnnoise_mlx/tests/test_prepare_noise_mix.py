@@ -71,6 +71,28 @@ def test_stratify_splits_reserves_evaluation_identity_per_mka_source():
     } == {"mka-lenovo", "mka-msi"}
 
 
+def test_stratify_splits_keeps_shared_mka_identity_together():
+    records = [
+        {
+            "accepted": True,
+            "category": "mka",
+            "source": source,
+            "identity": identity,
+            "split": "train",
+        }
+        for source, identities in {
+            "mka-lenovo": ("shared", "lenovo-only"),
+            "mka-msi": ("shared", "msi-only"),
+        }.items()
+        for identity in identities
+    ]
+    stratify_splits(records)
+    shared_splits = {
+        row["split"] for row in records if row["identity"] == "shared"
+    }
+    assert len(shared_splits) == 1
+
+
 def test_weighted_category_requires_two_identities():
     records = [
         {
