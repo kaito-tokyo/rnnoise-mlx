@@ -37,6 +37,37 @@ def _flatten_metrics(prefix: str, values: dict[str, Any] | None) -> dict[str, fl
     return metrics
 
 
+def initial_evaluation_from_run(run: Any) -> dict[str, Any] | None:
+    """Reconstruct a legacy checkpoint's baseline from its MLflow run."""
+    metrics = run.data.metrics
+    prefix = "eval_initial_"
+    values = {
+        key.removeprefix(prefix): value
+        for key, value in metrics.items()
+        if key.startswith(prefix)
+    }
+    if not values:
+        return None
+    required = {
+        "total_loss", "gain_loss", "vad_loss", "finite",
+        "outputs_in_unit_interval", "batches",
+    }
+    missing = sorted(required - values.keys())
+    if missing:
+        raise ValueError(
+            "MLflow run has incomplete initial evaluation metrics: "
+            + ", ".join(missing)
+        )
+    return {
+        "total_loss": float(values["total_loss"]),
+        "gain_loss": float(values["gain_loss"]),
+        "vad_loss": float(values["vad_loss"]),
+        "finite": bool(values["finite"]),
+        "outputs_in_unit_interval": bool(values["outputs_in_unit_interval"]),
+        "batches": int(values["batches"]),
+    }
+
+
 def _git_metadata(root: Path) -> dict[str, str]:
     def git(*arguments: str) -> str:
         result = subprocess.run(

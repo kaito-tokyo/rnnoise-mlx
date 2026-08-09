@@ -6,7 +6,7 @@ import mlx.optimizers as optim
 from mlx.utils import tree_flatten
 
 from rnnoise_mlx.training.checkpoint import load_checkpoint, save_checkpoint
-from rnnoise_mlx.training.train import _feature_manifest
+from rnnoise_mlx.training.train import _feature_manifest, _recover_initial_evaluation
 from rnnoise_mlx.training.model import ModelConfig, RNNoise
 from rnnoise_mlx.training.tracking import MLflowTracker
 
@@ -368,3 +368,11 @@ def test_feature_manifest_supports_generated_and_store_layouts(tmp_path):
     store_manifest = store / "manifest.json"
     store_manifest.write_text("{}\n")
     assert _feature_manifest(stored_features) == store_manifest
+
+
+def test_legacy_initial_evaluation_prefers_existing_summary(tmp_path):
+    expected = {"total_loss": 0.5, "batches": 4}
+    (tmp_path / "training.json").write_text(
+        json.dumps({"initial_evaluation": expected}) + "\n"
+    )
+    assert _recover_initial_evaluation(tmp_path, None) == expected

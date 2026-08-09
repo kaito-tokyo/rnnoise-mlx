@@ -20,13 +20,26 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .evaluate import evaluate
 from .loss import rnnoise_loss, rnnoise_loss_aligned
 from .model import ModelConfig, RNNoise
-from .tracking import MLflowTracker, validate_tracking_target
+from .tracking import (
+    MLflowTracker,
+    initial_evaluation_from_run,
+    validate_tracking_target,
+)
 
 
 def _feature_manifest(path: str | Path) -> Path | None:
     feature = Path(path)
     candidates = (feature.with_suffix(".manifest.json"), feature.parent / "manifest.json")
     return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def _recover_initial_evaluation(output: Path, existing_run) -> dict | None:
+    summary_path = output / "training.json"
+    if summary_path.is_file():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("initial_evaluation") is not None:
+            return summary["initial_evaluation"]
+    return initial_evaluation_from_run(existing_run) if existing_run is not None else None
 
 
 def main():
@@ -109,7 +122,7 @@ def main():
 
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    validate_tracking_target(
+    existing_run = validate_tracking_target(
         args.mlflow_tracking_uri, args.mlflow_experiment, args.mlflow_run_id
     )
     provenance_artifacts = list(args.provenance_artifact)
@@ -145,7 +158,15 @@ def main():
         resume_epoch = int(restored["next_epoch"])
         resume_batch = int(restored["next_batch"])
         elapsed_before_resume = float(restored["elapsed_seconds"])
-        initial_evaluation = restored.get("initial_evaluation")
+        if "initial_evaluation" in restored:
+            initial_evaluation = restored["initial_evaluation"]
+        elif args.eval_features is not None:
+            initial_evaluation = _recover_initial_evaluation(output, existing_run)
+            if initial_evaluation is None:
+                raise ValueError(
+                    "legacy checkpoint initial evaluation is unavailable from "
+                    "training.json and MLflow"
+                )
         print(
             json.dumps({"resumed_from": str(args.resume_from), "update": update}),
             flush=True,
