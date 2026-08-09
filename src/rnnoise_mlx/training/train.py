@@ -134,6 +134,7 @@ def main():
     resume_epoch = 1
     resume_batch = 0
     elapsed_before_resume = 0.0
+    initial_evaluation = None
     if args.resume_from:
         restored = load_checkpoint(
             args.resume_from.resolve(), model, optimizer, config, vars(args)
@@ -144,17 +145,19 @@ def main():
         resume_epoch = int(restored["next_epoch"])
         resume_batch = int(restored["next_batch"])
         elapsed_before_resume = float(restored["elapsed_seconds"])
+        initial_evaluation = restored.get("initial_evaluation")
         print(
             json.dumps({"resumed_from": str(args.resume_from), "update": update}),
             flush=True,
         )
+    tracker_parameters = {**vars(args), "resume_update": update if args.resume_from else 0}
     tracker = MLflowTracker(
         args.mlflow_tracking_uri,
         args.mlflow_experiment,
         args.mlflow_run_name,
         args.mlflow_run_id,
         output.resolve(),
-        vars(args),
+        tracker_parameters,
         provenance_artifacts,
     )
     print(json.dumps({"mlflow_run_id": tracker.run_id}), flush=True)
@@ -162,7 +165,6 @@ def main():
         json.dumps({"run_id": tracker.run_id}, indent=2) + "\n"
     )
     eval_dataset = FeatureDataset(args.eval_features, args.sequence_length) if args.eval_features else None
-    initial_evaluation = None
     if args.resume_from is None:
         initial_evaluation = (
             evaluate(model, eval_dataset, args.batch_size, args.gamma)
@@ -405,6 +407,7 @@ def main():
                     elapsed_seconds=elapsed_before_resume + time.monotonic() - started,
                     history=history,
                     training_config=vars(args),
+                    initial_evaluation=initial_evaluation,
                 )
                 tracker.log_checkpoint(checkpoint, update)
                 checkpoint_due = False

@@ -6,10 +6,12 @@ import numpy as np
 from rnnoise_mlx.tools.prepare_noise_mix import (
     PRESSURES,
     _allocate,
-    _multi_pressure_stream,
+    _cycle_chunks,
+    _multi_pressure_chunks,
     metrics,
     split_for,
     stratify_splits,
+    validate_splittable_categories,
 )
 
 
@@ -46,6 +48,29 @@ def test_stratify_splits_keeps_every_category_in_evaluation():
     assert sum(row["split"] == "eval" for row in records if row["category"] == "common") == 2
 
 
+def test_weighted_category_requires_two_identities():
+    records = [
+        {
+            "accepted": True,
+            "category": category,
+            "identity": f"{category}-{index}",
+        }
+        for category in {
+            "dns_typing", "dns_door", "dns_squeak", "dns_dragging",
+            "dns_copy-machine", "dns_human", "mka", "multi_pressure",
+            "dns_fan", "musan_curated",
+        }
+        for index in range(2)
+    ]
+    removed_category = records.pop()["category"]
+    try:
+        validate_splittable_categories(records)
+    except ValueError as error:
+        assert removed_category in str(error)
+    else:
+        raise AssertionError("unsplittable category was accepted")
+
+
 def test_metrics_measure_stationary_pcm(tmp_path):
     samples = np.full(48_000, 1000, dtype="<i2")
     path = tmp_path / "steady.wav"
@@ -64,13 +89,38 @@ def test_multi_pressure_interleaves_pressure_and_silence(tmp_path, monkeypatch):
         pressure = directory.lower()
         path = tmp_path / directory / "key.wav"
         write_wav(path, np.full(480, values[pressure], dtype="<i2"))
-        records.append({"source": f"multi-pressure-{pressure}", "path": str(path)})
+        records.append({
+            "source": f"multi-pressure-{pressure}",
+            "path": str(path),
+            "relative_path": f"{directory}/key.wav",
+            "identity": "key",
+        })
 
     monkeypatch.setattr(
         "rnnoise_mlx.tools.prepare_noise_mix.decode_48k",
         lambda path: np.frombuffer(wave.open(str(path), "rb").readframes(480), dtype="<i2"),
     )
-    stream = _multi_pressure_stream(records, 200_000, "train")
+    rendered = list(_multi_pressure_chunks(records, 200_000, "train"))
+    stream = np.concatenate([chunk for chunk, _ in rendered])
     assert len(stream) == 200_000
     assert {1000, 2000, 3000}.issubset(set(np.unique(stream)))
     assert 0 in stream
+    assert {source for _, source in rendered if source} == {
+        f"{directory}/key.wav" for directory in PRESSURES
+    }
+
+
+def test_cycle_chunks_reports_only_consumed_sources(tmp_path, monkeypatch):
+    records = [
+        {
+            "path": str(tmp_path / f"{index}.wav"),
+            "relative_path": f"{index}.wav",
+        }
+        for index in range(3)
+    ]
+    monkeypatch.setattr(
+        "rnnoise_mlx.tools.prepare_noise_mix.decode_48k",
+        lambda path: np.full(10, int(path.stem), dtype="<i2"),
+    )
+    rendered = list(_cycle_chunks(records, 5))
+    assert [source for _, source in rendered] == ["0.wav"]

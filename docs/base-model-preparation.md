@@ -47,7 +47,22 @@ evaluation.
 .venv/bin/python -m rnnoise_mlx.tools.prepare_base_dataset render \
   --corpus data/corpus --manifests data/manifests --output data/prepared \
   --speech-limit 40000 --noise-limit 1500 --rir-limit 512 --workers 8
+
+.venv/bin/python -m rnnoise_mlx.tools.prepare_noise_mix audit \
+  --corpus data/corpus --output data/noise-mix/audit.json
+.venv/bin/python -m rnnoise_mlx.tools.prepare_noise_mix render \
+  --audit data/noise-mix/audit.json --output data/noise-mix/prepared \
+  --train-hours 1 --eval-hours 0.1
+
+cp data/noise-mix/prepared/train_background.pcm data/prepared/train_background.pcm
+cp data/noise-mix/prepared/train_foreground.pcm data/prepared/train_foreground.pcm
+cp data/noise-mix/prepared/eval_background.pcm data/prepared/eval_background.pcm
+cp data/noise-mix/prepared/eval_foreground.pcm data/prepared/eval_foreground.pcm
 ```
+
+The final four commands replace only the base renderer's MUSAN noise streams.
+They retain its prepared speech and RIR files while ensuring feature generation
+reads the curated DNS/MKA/Multi-Pressure streams from `data/prepared`.
 
 Manifest entries are ordered by a seeded hash, so limits do not introduce a
 filename-order speaker or subset bias. `dump_features` transforms every RIR at

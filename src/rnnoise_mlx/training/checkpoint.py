@@ -54,6 +54,7 @@ def save_checkpoint(
     elapsed_seconds: float,
     history: list[dict[str, Any]],
     training_config: dict[str, Any],
+    initial_evaluation: dict[str, Any] | None = None,
 ) -> Path:
     """Atomically write a complete checkpoint and return its final directory."""
     mx.eval(model.state, optimizer.state, mx.random.state)
@@ -81,6 +82,7 @@ def save_checkpoint(
             "processed_frames": processed_frames,
             "elapsed_seconds": elapsed_seconds,
             "history": history,
+            "initial_evaluation": initial_evaluation,
         }
         (temporary / "trainer-state.json").write_text(
             json.dumps(trainer_state, indent=2) + "\n"
@@ -162,4 +164,6 @@ def load_checkpoint(
     state = json.loads((checkpoint / "trainer-state.json").read_text())
     if state.get("format_version") != FORMAT_VERSION:
         raise ValueError("trainer state format does not match")
+    if saved_config.get("features") != current_config.get("features"):
+        state["next_batch"] = 0
     return state

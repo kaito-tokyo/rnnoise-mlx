@@ -190,6 +190,12 @@ def main() -> None:
         help="mix foreground in approximately one out of N sequences (default: 8)",
     )
     parser.add_argument(
+        "--evaluation-foreground-probability-denominator",
+        type=int,
+        default=8,
+        help="fixed evaluation foreground denominator (default: 8)",
+    )
+    parser.add_argument(
         "--disable-foreground",
         action="store_true",
         help=(
@@ -202,6 +208,10 @@ def main() -> None:
         parser.error("--progress-interval must be positive")
     if args.foreground_probability_denominator < 1:
         parser.error("--foreground-probability-denominator must be at least 1")
+    if args.evaluation_foreground_probability_denominator < 1:
+        parser.error(
+            "--evaluation-foreground-probability-denominator must be at least 1"
+        )
 
     dump_features = args.dump_features.resolve()
     if not dump_features.is_file():
@@ -228,7 +238,7 @@ def main() -> None:
         args.seed,
         0,
         0,
-        args.foreground_probability_denominator,
+        args.evaluation_foreground_probability_denominator,
     )
 
 

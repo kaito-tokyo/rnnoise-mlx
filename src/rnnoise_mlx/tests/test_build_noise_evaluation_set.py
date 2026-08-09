@@ -14,3 +14,15 @@ def test_mix_at_snr_is_exact_and_avoids_clipping():
     np.testing.assert_allclose(measured, 10, atol=1e-9)
     np.testing.assert_allclose(mixture, clean_scaled + noise_scaled)
     assert np.max(np.abs(mixture)) <= 0.99 + 1e-12
+
+
+def test_mix_at_snr_scales_large_component_even_when_mixture_cancels():
+    clean = np.full(100, 0.9)
+    noise = np.full(100, -0.9)
+    clean_scaled, noise_scaled, mixture = mix_at_snr(clean, noise, 0)
+    assert max(
+        np.max(np.abs(clean_scaled)),
+        np.max(np.abs(noise_scaled)),
+        np.max(np.abs(mixture)),
+    ) <= 0.99 + 1e-12
+    np.testing.assert_allclose(mixture, clean_scaled + noise_scaled)

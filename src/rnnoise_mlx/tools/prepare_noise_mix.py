@@ -238,8 +238,26 @@ def stratify_splits(records: list[dict[str, Any]]) -> None:
             )
 
 
+def validate_splittable_categories(records: list[dict[str, Any]]) -> None:
+    """Reject weighted categories that cannot contribute to both splits."""
+    weighted = BACKGROUND_WEIGHTS.keys() | FOREGROUND_WEIGHTS.keys()
+    identities: dict[str, set[str]] = defaultdict(set)
+    for record in records:
+        if record["accepted"] and record["category"] in weighted:
+            identities[record["category"]].add(record["identity"])
+    invalid = sorted(
+        category for category in weighted if len(identities[category]) < 2
+    )
+    if invalid:
+        raise ValueError(
+            "weighted categories require at least two accepted identities: "
+            + ", ".join(invalid)
+        )
+
+
 def audit(corpus: Path, output: Path) -> dict[str, Any]:
     records = dns_records(corpus) + mka_records(corpus) + multi_pressure_records(corpus) + musan_records(corpus)
+    validate_splittable_categories(records)
     stratify_splits(records)
     accepted = [row for row in records if row["accepted"]]
     identities: dict[str, set[str]] = defaultdict(set)
@@ -276,47 +294,52 @@ def audit(corpus: Path, output: Path) -> dict[str, Any]:
     return result
 
 
-def _cycle_to_samples(paths: list[Path], sample_count: int) -> np.ndarray:
-    if not paths:
+def _cycle_chunks(
+    records: list[dict[str, Any]], sample_count: int
+) -> Iterable[tuple[np.ndarray, str | None]]:
+    if not records:
         raise ValueError("cannot render an empty category")
-    pieces = []
     written = 0
     index = 0
     while written < sample_count:
-        audio = decode_48k(paths[index % len(paths)])
+        record = records[index % len(records)]
+        audio = decode_48k(Path(record["path"]))
         take = min(len(audio), sample_count - written)
-        pieces.append(audio[:take])
+        if take:
+            yield audio[:take], record["relative_path"]
         written += take
         index += 1
-    return np.concatenate(pieces) if pieces else np.empty(0, dtype="<i2")
 
 
-def _multi_pressure_stream(records: list[dict[str, Any]], sample_count: int, split: str) -> np.ndarray:
-    by_pressure: dict[str, list[Path]] = defaultdict(list)
+def _multi_pressure_chunks(
+    records: list[dict[str, Any]], sample_count: int, split: str
+) -> Iterable[tuple[np.ndarray, str | None]]:
+    by_pressure: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in records:
         pressure = row["source"].removeprefix("multi-pressure-")
-        by_pressure[pressure].append(Path(row["path"]))
-    for paths in by_pressure.values():
-        paths.sort(key=lambda path: stable_score(str(path), f"mp-{split}"))
+        by_pressure[pressure].append(row)
+    for pressure_records in by_pressure.values():
+        pressure_records.sort(
+            key=lambda row: stable_score(row["identity"], f"mp-{split}")
+        )
     rng = random.Random(stable_score(split, "multi-pressure-silence"))
-    pieces = []
     written = 0
     indices = Counter()
     order = ("highp", "mediump", "lowp")
     while written < sample_count:
         pressure = order[sum(indices.values()) % len(order)]
-        paths = by_pressure[pressure]
-        path = paths[indices[pressure] % len(paths)]
+        pressure_records = by_pressure[pressure]
+        record = pressure_records[indices[pressure] % len(pressure_records)]
         indices[pressure] += 1
-        audio = decode_48k(path)
+        audio = decode_48k(Path(record["path"]))
         silence = np.zeros(round(RATE * rng.uniform(0.2, 1.2)), dtype="<i2")
-        for piece in (audio, silence):
+        for piece, source in ((audio, record["relative_path"]), (silence, None)):
             take = min(len(piece), sample_count - written)
-            pieces.append(piece[:take])
+            if take:
+                yield piece[:take], source
             written += take
             if written == sample_count:
                 break
-    return np.concatenate(pieces)
 
 
 def _allocate(total: int, weights: dict[str, int]) -> dict[str, int]:
@@ -326,11 +349,19 @@ def _allocate(total: int, weights: dict[str, int]) -> dict[str, int]:
     return allocated
 
 
-def _write_pcm(path: Path, chunks: Iterable[np.ndarray]) -> None:
+def _write_pcm(
+    path: Path, chunks: Iterable[tuple[np.ndarray, str | None]]
+) -> list[str]:
     path.parent.mkdir(parents=True, exist_ok=True)
+    used_sources: list[str] = []
+    seen_sources: set[str] = set()
     with path.open("wb") as destination:
-        for chunk in chunks:
+        for chunk, source in chunks:
             destination.write(np.asarray(chunk, dtype="<i2").tobytes())
+            if source is not None and source not in seen_sources:
+                seen_sources.add(source)
+                used_sources.append(source)
+    return used_sources
 
 
 def render(audit_path: Path, output: Path, train_hours: float, eval_hours: float) -> dict[str, Any]:
@@ -348,18 +379,16 @@ def render(audit_path: Path, output: Path, train_hours: float, eval_hours: float
         split_manifest: dict[str, Any] = {"hours": hours, "files": {}}
         for kind, weights in (("background", BACKGROUND_WEIGHTS), ("foreground", FOREGROUND_WEIGHTS)):
             allocations = _allocate(total_samples, weights)
-            chunks = []
-            used_records = []
-            for category, count in allocations.items():
-                category_rows = by_category[category]
-                if category == "multi_pressure":
-                    chunk = _multi_pressure_stream(category_rows, count, split)
-                else:
-                    chunk = _cycle_to_samples([Path(row["path"]) for row in category_rows], count)
-                chunks.append(chunk)
-                used_records.extend(row["relative_path"] for row in category_rows)
+
+            def chunks():
+                for category, count in allocations.items():
+                    category_rows = by_category[category]
+                    if category == "multi_pressure":
+                        yield from _multi_pressure_chunks(category_rows, count, split)
+                    else:
+                        yield from _cycle_chunks(category_rows, count)
             target = output / f"{split}_{kind}.pcm"
-            _write_pcm(target, chunks)
+            used_records = _write_pcm(target, chunks())
             split_manifest["files"][kind] = {
                 "path": str(target.resolve()),
                 "bytes": target.stat().st_size,

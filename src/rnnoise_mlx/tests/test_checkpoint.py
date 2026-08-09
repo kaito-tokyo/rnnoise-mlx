@@ -62,6 +62,7 @@ def test_complete_checkpoint_round_trip(tmp_path):
         elapsed_seconds=12.5,
         history=[{"update": 32, "epoch": 1, "loss": 0.25}],
         training_config=parameters,
+        initial_evaluation={"loss": 0.75},
     )
 
     restored_model = RNNoise(config)
@@ -75,6 +76,7 @@ def test_complete_checkpoint_round_trip(tmp_path):
     assert state["update"] == 32
     assert state["next_epoch"] == 2
     assert state["next_batch"] == 7
+    assert state["initial_evaluation"] == {"loss": 0.75}
     assert {path.name for path in checkpoint.iterdir()} == {
         "manifest.json",
         "mlx-random-state.safetensors",
@@ -206,6 +208,38 @@ def test_checkpoint_allows_feature_and_tbptt_chapter_changes(tmp_path):
     )
 
     assert state["update"] == 5_000
+    assert state["next_batch"] == 0
+
+
+def test_checkpoint_resets_nonzero_batch_for_new_features(tmp_path):
+    config, model, optimizer = _updated_model_and_optimizer()
+    parameters = {
+        "features": "generation-0/train.f32",
+        "batch_size": 2,
+        "sequence_length": 10,
+    }
+    checkpoint = save_checkpoint(
+        tmp_path,
+        model,
+        optimizer,
+        config,
+        update=5,
+        next_epoch=2,
+        next_batch=7,
+        processed_frames=100,
+        elapsed_seconds=1.0,
+        history=[],
+        training_config=parameters,
+    )
+    state = load_checkpoint(
+        checkpoint,
+        RNNoise(config),
+        optim.AdamW(learning_rate=1e-3),
+        config,
+        dict(parameters, features="generation-1/train.f32"),
+    )
+    assert state["next_epoch"] == 2
+    assert state["next_batch"] == 0
 
 
 def test_checkpoint_manifest_is_json_serializable_with_paths(tmp_path):
@@ -290,7 +324,22 @@ def test_mlflow_uploads_small_provenance_artifacts(tmp_path, monkeypatch):
     manifest.write_text("{}\n")
     tracker = object.__new__(MLflowTracker)
     tracker.log_provenance_artifacts([manifest, manifest])
-    assert calls == [(str(manifest.resolve()), "provenance/data/000")]
+    assert calls == [
+        (str(manifest.resolve()), "provenance/data/chapter-00000000/000")
+    ]
+
+
+def test_mlflow_separates_resumed_provenance_chapters(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "rnnoise_mlx.training.tracking.mlflow.log_artifact",
+        lambda local, artifact_path: calls.append((local, artifact_path)),
+    )
+    manifest = tmp_path / "train.manifest.json"
+    manifest.write_text("{}\n")
+    tracker = object.__new__(MLflowTracker)
+    tracker.log_provenance_artifacts([manifest], namespace="chapter-00005000")
+    assert calls[0][1] == "provenance/data/chapter-00005000/000"
 
 
 def test_mlflow_rejects_bulk_provenance_artifact(tmp_path):

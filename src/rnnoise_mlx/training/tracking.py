@@ -118,7 +118,10 @@ class MLflowTracker:
         run_config = output / "run-config.json"
         run_config.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n")
         mlflow.log_artifact(str(run_config), artifact_path="provenance")
-        self.log_provenance_artifacts(provenance_artifacts or [])
+        chapter = int(parameters.get("resume_update", 0))
+        self.log_provenance_artifacts(
+            provenance_artifacts or [], namespace=f"chapter-{chapter:08d}"
+        )
 
     @property
     def run_id(self) -> str:
@@ -156,7 +159,9 @@ class MLflowTracker:
         )
         mlflow.log_metric("checkpoint_uploaded_update", float(update), step=update)
 
-    def log_provenance_artifacts(self, artifacts: list[Path]) -> None:
+    def log_provenance_artifacts(
+        self, artifacts: list[Path], namespace: str = "chapter-00000000"
+    ) -> None:
         """Upload small manifests/configuration, never bulk feature or corpus data."""
         seen: set[Path] = set()
         for index, artifact in enumerate(artifacts):
@@ -172,7 +177,8 @@ class MLflowTracker:
                     f"provenance artifact exceeds 16 MiB: {artifact} ({size} bytes)"
                 )
             mlflow.log_artifact(
-                str(artifact), artifact_path=f"provenance/data/{index:03d}"
+                str(artifact),
+                artifact_path=f"provenance/data/{namespace}/{index:03d}",
             )
 
     def complete(self, summary: dict[str, Any], output: Path) -> None:

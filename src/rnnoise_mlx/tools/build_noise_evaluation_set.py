@@ -55,7 +55,11 @@ def mix_at_snr(clean: np.ndarray, noise: np.ndarray, snr_db: float) -> tuple[np.
     noise_rms = np.sqrt(np.mean(noise * noise) + 1e-20)
     scaled_noise = noise * (clean_rms / (noise_rms * 10 ** (snr_db / 20)))
     mixture = clean + scaled_noise
-    peak = np.max(np.abs(mixture), initial=0)
+    peak = max(
+        np.max(np.abs(clean), initial=0),
+        np.max(np.abs(scaled_noise), initial=0),
+        np.max(np.abs(mixture), initial=0),
+    )
     scale = min(1.0, 0.99 / peak) if peak else 1.0
     return clean * scale, scaled_noise * scale, mixture * scale
 
