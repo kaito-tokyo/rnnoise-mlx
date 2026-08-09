@@ -76,7 +76,24 @@ def test_tracker_reuses_existing_run_and_retains_name(tmp_path, monkeypatch):
     assert (
         "log_artifact",
         str(tmp_path / "run-config.json"),
-        "provenance",
+        "provenance/chapter-00000000",
+    ) in calls
+
+
+def test_resumed_run_config_uses_update_namespace(tmp_path, monkeypatch):
+    calls = _mock_mlflow(monkeypatch)
+    tracking.MLflowTracker(
+        "http://mlflow.test",
+        "rnnoise-mlx",
+        None,
+        "run-123",
+        tmp_path,
+        {"batch_size": 8, "resume_update": 5000},
+    )
+    assert (
+        "log_artifact",
+        str(tmp_path / "run-config.json"),
+        "provenance/chapter-00005000",
     ) in calls
 
 
@@ -103,3 +120,31 @@ def test_tracker_rejects_run_from_another_experiment(tmp_path, monkeypatch):
             tmp_path,
             {},
         )
+
+
+def test_initial_evaluation_is_reconstructed_from_mlflow_metrics():
+    run = SimpleNamespace(data=SimpleNamespace(metrics={
+        "eval_initial_total_loss": 0.5,
+        "eval_initial_gain_loss": 0.25,
+        "eval_initial_vad_loss": 0.75,
+        "eval_initial_finite": 1.0,
+        "eval_initial_outputs_in_unit_interval": 1.0,
+        "eval_initial_batches": 4.0,
+        "train_loss": 0.1,
+    }))
+    assert tracking.initial_evaluation_from_run(run) == {
+        "total_loss": 0.5,
+        "gain_loss": 0.25,
+        "vad_loss": 0.75,
+        "finite": True,
+        "outputs_in_unit_interval": True,
+        "batches": 4,
+    }
+
+
+def test_incomplete_mlflow_initial_evaluation_is_rejected():
+    run = SimpleNamespace(data=SimpleNamespace(metrics={
+        "eval_initial_total_loss": 0.5,
+    }))
+    with pytest.raises(ValueError, match="incomplete initial evaluation"):
+        tracking.initial_evaluation_from_run(run)

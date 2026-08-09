@@ -16,17 +16,30 @@ import mlx.optimizers as optim
 import numpy as np
 
 from .data import FeatureDataset
-from .checkpoint import load_checkpoint, save_checkpoint
+from .checkpoint import _feature_identity, load_checkpoint, save_checkpoint
 from .evaluate import evaluate
 from .loss import rnnoise_loss, rnnoise_loss_aligned
 from .model import ModelConfig, RNNoise
-from .tracking import MLflowTracker, validate_tracking_target
+from .tracking import (
+    MLflowTracker,
+    initial_evaluation_from_run,
+    validate_tracking_target,
+)
 
 
 def _feature_manifest(path: str | Path) -> Path | None:
     feature = Path(path)
     candidates = (feature.with_suffix(".manifest.json"), feature.parent / "manifest.json")
     return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def _recover_initial_evaluation(output: Path, existing_run) -> dict | None:
+    summary_path = output / "training.json"
+    if summary_path.is_file():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("initial_evaluation") is not None:
+            return summary["initial_evaluation"]
+    return initial_evaluation_from_run(existing_run) if existing_run is not None else None
 
 
 def main():
@@ -109,7 +122,7 @@ def main():
 
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    validate_tracking_target(
+    existing_run = validate_tracking_target(
         args.mlflow_tracking_uri, args.mlflow_experiment, args.mlflow_run_id
     )
     provenance_artifacts = list(args.provenance_artifact)
@@ -119,6 +132,10 @@ def main():
         manifest = _feature_manifest(feature_path)
         if manifest is not None:
             provenance_artifacts.append(manifest)
+    verified_feature_identity = _feature_identity(vars(args))
+    verified_evaluation_feature_identity = _feature_identity(
+        vars(args), "eval_features"
+    )
     dataset = FeatureDataset(args.features, args.sequence_length)
     mx.random.seed(args.seed)
     config = ModelConfig()
@@ -134,9 +151,16 @@ def main():
     resume_epoch = 1
     resume_batch = 0
     elapsed_before_resume = 0.0
+    initial_evaluation = None
     if args.resume_from:
         restored = load_checkpoint(
-            args.resume_from.resolve(), model, optimizer, config, vars(args)
+            args.resume_from.resolve(),
+            model,
+            optimizer,
+            config,
+            vars(args),
+            feature_identity=verified_feature_identity,
+            evaluation_feature_identity=verified_evaluation_feature_identity,
         )
         history = restored["history"]
         update = int(restored["update"])
@@ -144,20 +168,33 @@ def main():
         resume_epoch = int(restored["next_epoch"])
         resume_batch = int(restored["next_batch"])
         elapsed_before_resume = float(restored["elapsed_seconds"])
+        if "initial_evaluation" in restored:
+            initial_evaluation = restored["initial_evaluation"]
+        elif args.eval_features is not None:
+            initial_evaluation = _recover_initial_evaluation(output, existing_run)
+            if initial_evaluation is None:
+                raise ValueError(
+                    "legacy checkpoint initial evaluation is unavailable from "
+                    "training.json and MLflow"
+                )
         print(
             json.dumps({"resumed_from": str(args.resume_from), "update": update}),
             flush=True,
         )
+    tracker_parameters = {**vars(args), "resume_update": update if args.resume_from else 0}
     tracker = MLflowTracker(
         args.mlflow_tracking_uri,
         args.mlflow_experiment,
         args.mlflow_run_name,
         args.mlflow_run_id,
         output.resolve(),
-        vars(args),
+        tracker_parameters,
         provenance_artifacts,
     )
     print(json.dumps({"mlflow_run_id": tracker.run_id}), flush=True)
+    (output / "mlflow-run.json").write_text(
+        json.dumps({"run_id": tracker.run_id}, indent=2) + "\n"
+    )
     eval_dataset = FeatureDataset(args.eval_features, args.sequence_length) if args.eval_features else None
     if args.resume_from is None:
         initial_evaluation = (
@@ -401,6 +438,9 @@ def main():
                     elapsed_seconds=elapsed_before_resume + time.monotonic() - started,
                     history=history,
                     training_config=vars(args),
+                    initial_evaluation=initial_evaluation,
+                    feature_identity=verified_feature_identity,
+                    evaluation_feature_identity=verified_evaluation_feature_identity,
                 )
                 tracker.log_checkpoint(checkpoint, update)
                 checkpoint_due = False

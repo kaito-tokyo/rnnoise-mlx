@@ -1,7 +1,8 @@
 # Preparing data for a base model
 
-This procedure generates RNNoise training features from LibriTTS-R, MUSAN, and
-RIRS_NOISES without using upstream weights or outputs. Original archives remain
+This procedure generates RNNoise training features from LibriTTS-R and
+RIRS_NOISES plus the curated DNS/MKA/Multi-Pressure mixture documented in
+[`noise-mix-dataset.md`](noise-mix-dataset.md). Original archives remain
 unchanged; extracted and generated files are stored under `data/`.
 
 ## 1. Extract the archives
@@ -15,7 +16,10 @@ data/corpus/
   LibriTTS_R/train-clean-360/
   LibriTTS_R/dev-clean/
   LibriTTS_R/test-clean/
-  musan/{noise,music,speech}/
+  musan/noise/                 # only the automatically curated background subset
+  DNS5/
+  MKA/
+  multi_pressure_keyboard/
   RIRS_NOISES/
 ```
 
@@ -27,7 +31,20 @@ tar -xzf /Users/umireon/Datasets/dev_clean.tar.gz -C data/corpus
 tar -xzf /Users/umireon/Datasets/test_clean.tar.gz -C data/corpus
 tar -xzf /Users/umireon/Datasets/musan.tar.gz -C data/corpus
 unzip -q /Users/umireon/Datasets/rirs_noises.zip -d data/corpus
+
+# Download these archives from the versioned official sources linked in
+# docs/noise-mix-dataset.md, then extract them into the required roots:
+unzip -q /path/to/dns5-freesound.zip -d data/corpus/DNS5
+unzip -q /path/to/mka-version-3.zip -d data/corpus/MKA
+unzip -q /path/to/multi-pressure-v8-dataset.zip \
+  -d data/corpus/multi_pressure_keyboard
 ```
+
+The extraction postcondition is that DNS WAVs exist below `DNS5/`, the MKA
+archive provides `MKA/MKA datasets/{Lenovo,MSI,Mac,Messenger,Zoom,hp}/`, and
+the Multi-Pressure archive provides
+`multi_pressure_keyboard/dataset/{HighP,MediumP,LowP}/`. Archive filenames may
+differ by download service; record their original names and SHA-256 values.
 
 ## 2. Create deterministic manifests and PCM streams
 
@@ -43,7 +60,22 @@ evaluation.
 .venv/bin/python -m rnnoise_mlx.tools.prepare_base_dataset render \
   --corpus data/corpus --manifests data/manifests --output data/prepared \
   --speech-limit 40000 --noise-limit 1500 --rir-limit 512 --workers 8
+
+.venv/bin/python -m rnnoise_mlx.tools.prepare_noise_mix audit \
+  --corpus data/corpus --output data/noise-mix/audit.json
+.venv/bin/python -m rnnoise_mlx.tools.prepare_noise_mix render \
+  --audit data/noise-mix/audit.json --output data/noise-mix/prepared \
+  --train-hours 1 --eval-hours 0.1
+
+cp data/noise-mix/prepared/train_background.pcm data/prepared/train_background.pcm
+cp data/noise-mix/prepared/train_foreground.pcm data/prepared/train_foreground.pcm
+cp data/noise-mix/prepared/eval_background.pcm data/prepared/eval_background.pcm
+cp data/noise-mix/prepared/eval_foreground.pcm data/prepared/eval_foreground.pcm
 ```
+
+The final four commands replace only the base renderer's MUSAN noise streams.
+They retain its prepared speech and RIR files while ensuring feature generation
+reads the curated DNS/MKA/Multi-Pressure streams from `data/prepared`.
 
 Manifest entries are ordered by a seeded hash, so limits do not introduce a
 filename-order speaker or subset bias. `dump_features` transforms every RIR at
@@ -150,7 +182,9 @@ manifest. Re-publishing the same valid generation reuses it.
 ## Provenance checklist
 
 - Archive filenames and SHA-256 values
-- Dataset versions and licenses for LibriTTS-R, MUSAN, and RIRS_NOISES
+- Dataset versions, source references, licenses, and required attributions for
+  LibriTTS-R, MUSAN, RIRS_NOISES, DNS Challenge 5 Freesound, MKA version 3,
+  and the Multi-Pressure Keyboard dataset version v8
 - Pinned RNNoise source revision
 - Every manifest and `manifest.json`
 - Feature counts, training command, seed, and repository commit

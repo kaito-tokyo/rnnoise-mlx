@@ -37,6 +37,37 @@ def _flatten_metrics(prefix: str, values: dict[str, Any] | None) -> dict[str, fl
     return metrics
 
 
+def initial_evaluation_from_run(run: Any) -> dict[str, Any] | None:
+    """Reconstruct a legacy checkpoint's baseline from its MLflow run."""
+    metrics = run.data.metrics
+    prefix = "eval_initial_"
+    values = {
+        key.removeprefix(prefix): value
+        for key, value in metrics.items()
+        if key.startswith(prefix)
+    }
+    if not values:
+        return None
+    required = {
+        "total_loss", "gain_loss", "vad_loss", "finite",
+        "outputs_in_unit_interval", "batches",
+    }
+    missing = sorted(required - values.keys())
+    if missing:
+        raise ValueError(
+            "MLflow run has incomplete initial evaluation metrics: "
+            + ", ".join(missing)
+        )
+    return {
+        "total_loss": float(values["total_loss"]),
+        "gain_loss": float(values["gain_loss"]),
+        "vad_loss": float(values["vad_loss"]),
+        "finite": bool(values["finite"]),
+        "outputs_in_unit_interval": bool(values["outputs_in_unit_interval"]),
+        "batches": int(values["batches"]),
+    }
+
+
 def _git_metadata(root: Path) -> dict[str, str]:
     def git(*arguments: str) -> str:
         result = subprocess.run(
@@ -115,10 +146,16 @@ class MLflowTracker:
                 }
             )
         atexit.register(self.fail_if_open)
+        chapter = int(parameters.get("resume_update", 0))
+        chapter_namespace = f"chapter-{chapter:08d}"
         run_config = output / "run-config.json"
         run_config.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n")
-        mlflow.log_artifact(str(run_config), artifact_path="provenance")
-        self.log_provenance_artifacts(provenance_artifacts or [])
+        mlflow.log_artifact(
+            str(run_config), artifact_path=f"provenance/{chapter_namespace}"
+        )
+        self.log_provenance_artifacts(
+            provenance_artifacts or [], namespace=chapter_namespace
+        )
 
     @property
     def run_id(self) -> str:
@@ -156,7 +193,9 @@ class MLflowTracker:
         )
         mlflow.log_metric("checkpoint_uploaded_update", float(update), step=update)
 
-    def log_provenance_artifacts(self, artifacts: list[Path]) -> None:
+    def log_provenance_artifacts(
+        self, artifacts: list[Path], namespace: str = "chapter-00000000"
+    ) -> None:
         """Upload small manifests/configuration, never bulk feature or corpus data."""
         seen: set[Path] = set()
         for index, artifact in enumerate(artifacts):
@@ -172,7 +211,8 @@ class MLflowTracker:
                     f"provenance artifact exceeds 16 MiB: {artifact} ({size} bytes)"
                 )
             mlflow.log_artifact(
-                str(artifact), artifact_path=f"provenance/data/{index:03d}"
+                str(artifact),
+                artifact_path=f"provenance/data/{namespace}/{index:03d}",
             )
 
     def complete(self, summary: dict[str, Any], output: Path) -> None:

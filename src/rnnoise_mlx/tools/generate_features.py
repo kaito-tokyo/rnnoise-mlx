@@ -50,6 +50,7 @@ def generate(
     seed: int = 0,
     sequence_start: int = 0,
     speech_offset_start: int = 0,
+    foreground_probability_denominator: int = 8,
 ) -> None:
     destination = output / f"{split}.f32"
     options = []
@@ -60,6 +61,10 @@ def generate(
         ]
     if disable_foreground:
         options.append("-disable_foreground")
+    options.extend([
+        "-foreground_probability_denominator",
+        str(foreground_probability_denominator),
+    ])
     command = [
         str(dump_features),
         "-seed", str(seed),
@@ -129,6 +134,7 @@ def generate(
             "path": str(dump_features),
             "sha256": _sha256(dump_features),
             "disable_foreground": disable_foreground,
+            "foreground_probability_denominator": foreground_probability_denominator,
             "rng_algorithm": RNG_ALGORITHM,
             "seed": seed,
             "sequence_start": sequence_start,
@@ -178,6 +184,18 @@ def main() -> None:
         help="directory containing train.txt and eval.txt sample-offset manifests",
     )
     parser.add_argument(
+        "--foreground-probability-denominator",
+        type=int,
+        default=8,
+        help="mix foreground in approximately one out of N sequences (default: 8)",
+    )
+    parser.add_argument(
+        "--evaluation-foreground-probability-denominator",
+        type=int,
+        default=8,
+        help="fixed evaluation foreground denominator (default: 8)",
+    )
+    parser.add_argument(
         "--disable-foreground",
         action="store_true",
         help=(
@@ -188,6 +206,12 @@ def main() -> None:
     args = parser.parse_args()
     if args.progress_interval <= 0:
         parser.error("--progress-interval must be positive")
+    if args.foreground_probability_denominator < 1:
+        parser.error("--foreground-probability-denominator must be at least 1")
+    if args.evaluation_foreground_probability_denominator < 1:
+        parser.error(
+            "--evaluation-foreground-probability-denominator must be at least 1"
+        )
 
     dump_features = args.dump_features.resolve()
     if not dump_features.is_file():
@@ -204,6 +228,7 @@ def main() -> None:
         args.seed,
         args.generation * args.train_count,
         args.speech_offset_start,
+        args.foreground_probability_denominator,
     )
     generate(
         dump_features, prepared, output, "eval", args.eval_count,
@@ -213,6 +238,7 @@ def main() -> None:
         args.seed,
         0,
         0,
+        args.evaluation_foreground_probability_denominator,
     )
 
 
