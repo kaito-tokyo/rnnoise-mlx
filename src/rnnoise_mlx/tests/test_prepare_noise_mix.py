@@ -49,6 +49,24 @@ def test_stratify_splits_keeps_every_category_in_evaluation():
     assert sum(row["split"] == "eval" for row in records if row["category"] == "common") == 2
 
 
+def test_stratify_splits_reserves_evaluation_identity_per_mka_source():
+    records = [
+        {
+            "accepted": True,
+            "category": "mka",
+            "source": source,
+            "identity": f"{source}-{index}",
+            "split": "train",
+        }
+        for source in ("mka-lenovo", "mka-msi")
+        for index in range(10)
+    ]
+    stratify_splits(records)
+    assert {
+        row["source"] for row in records if row["split"] == "eval"
+    } == {"mka-lenovo", "mka-msi"}
+
+
 def test_weighted_category_requires_two_identities():
     records = [
         {

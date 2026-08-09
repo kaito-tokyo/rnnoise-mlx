@@ -76,7 +76,24 @@ def test_tracker_reuses_existing_run_and_retains_name(tmp_path, monkeypatch):
     assert (
         "log_artifact",
         str(tmp_path / "run-config.json"),
-        "provenance",
+        "provenance/chapter-00000000",
+    ) in calls
+
+
+def test_resumed_run_config_uses_update_namespace(tmp_path, monkeypatch):
+    calls = _mock_mlflow(monkeypatch)
+    tracking.MLflowTracker(
+        "http://mlflow.test",
+        "rnnoise-mlx",
+        None,
+        "run-123",
+        tmp_path,
+        {"batch_size": 8, "resume_update": 5000},
+    )
+    assert (
+        "log_artifact",
+        str(tmp_path / "run-config.json"),
+        "provenance/chapter-00005000",
     ) in calls
 
 

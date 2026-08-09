@@ -31,6 +31,7 @@ DNS_FOREGROUND_WEIGHTS = {
 FOREGROUND_WEIGHTS = {**DNS_FOREGROUND_WEIGHTS, "mka": 25, "multi_pressure": 15}
 BACKGROUND_WEIGHTS = {"dns_fan": 90, "musan_curated": 10}
 MKA_COLLECTIONS = ("Lenovo", "MSI", "Mac", "Messenger", "Zoom", "hp")
+MKA_SOURCES = tuple(f"mka-{collection.lower()}" for collection in MKA_COLLECTIONS)
 PRESSURES = ("HighP", "MediumP", "LowP")
 
 
@@ -228,7 +229,12 @@ def stratify_splits(records: list[dict[str, Any]]) -> None:
     by_category: dict[str, set[str]] = defaultdict(set)
     for record in records:
         if record["accepted"]:
-            by_category[record["category"]].add(record["identity"])
+            stratum = (
+                record["source"]
+                if record["category"] == "mka"
+                else record["category"]
+            )
+            by_category[stratum].add(record["identity"])
     evaluation: dict[str, set[str]] = {}
     for category, identities in by_category.items():
         ordered = sorted(identities, key=lambda identity: stable_score(identity, f"split-{category}"))
@@ -236,8 +242,13 @@ def stratify_splits(records: list[dict[str, Any]]) -> None:
         evaluation[category] = set(ordered[:count])
     for record in records:
         if record["accepted"]:
+            stratum = (
+                record["source"]
+                if record["category"] == "mka"
+                else record["category"]
+            )
             record["split"] = (
-                "eval" if record["identity"] in evaluation[record["category"]] else "train"
+                "eval" if record["identity"] in evaluation[stratum] else "train"
             )
 
 
@@ -255,6 +266,19 @@ def validate_splittable_categories(records: list[dict[str, Any]]) -> None:
         raise ValueError(
             "weighted categories require at least two accepted identities: "
             + ", ".join(invalid)
+        )
+    missing_mka_sources = sorted(
+        source
+        for source in MKA_SOURCES
+        if not any(
+            record["accepted"] and record.get("source") == source
+            for record in records
+        )
+    )
+    if missing_mka_sources:
+        raise ValueError(
+            "MKA sources require at least one accepted identity: "
+            + ", ".join(missing_mka_sources)
         )
 
 

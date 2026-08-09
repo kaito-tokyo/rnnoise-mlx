@@ -283,6 +283,56 @@ def test_checkpoint_resets_batch_when_same_path_feature_content_changes(tmp_path
     assert state["next_batch"] == 0
 
 
+def test_checkpoint_rejects_changed_evaluation_content_and_gamma(tmp_path):
+    config, model, optimizer = _updated_model_and_optimizer()
+    parameters = _feature_parameters(tmp_path)
+    eval_dir = tmp_path / "eval"
+    eval_dir.mkdir()
+    eval_parameters = _feature_parameters(eval_dir, b"eval-zero")
+    parameters["eval_features"] = eval_parameters["features"]
+    parameters["gamma"] = 0.25
+    checkpoint = save_checkpoint(
+        tmp_path / "checkpoints",
+        model,
+        optimizer,
+        config,
+        update=5,
+        next_epoch=2,
+        next_batch=7,
+        processed_frames=100,
+        elapsed_seconds=1.0,
+        history=[],
+        training_config=parameters,
+    )
+    _feature_parameters(eval_dir, b"eval-one")
+    try:
+        load_checkpoint(
+            checkpoint,
+            RNNoise(config),
+            optim.AdamW(learning_rate=1e-3),
+            config,
+            parameters,
+        )
+    except ValueError as error:
+        assert "evaluation features differ" in str(error)
+    else:
+        raise AssertionError("changed evaluation content was accepted")
+
+    changed_gamma = dict(parameters, gamma=0.5)
+    try:
+        load_checkpoint(
+            checkpoint,
+            RNNoise(config),
+            optim.AdamW(learning_rate=1e-3),
+            config,
+            changed_gamma,
+        )
+    except ValueError as error:
+        assert "gamma" in str(error)
+    else:
+        raise AssertionError("changed evaluation gamma was accepted")
+
+
 def test_legacy_checkpoint_without_feature_identity_resets_batch(tmp_path):
     config, model, optimizer = _updated_model_and_optimizer()
     parameters = _feature_parameters(tmp_path)

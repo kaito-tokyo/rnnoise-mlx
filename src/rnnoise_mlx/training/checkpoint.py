@@ -41,8 +41,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _feature_identity(training_config: dict[str, Any]) -> str | None:
-    value = training_config.get("features")
+def _feature_identity(
+    training_config: dict[str, Any], key: str = "features"
+) -> str | None:
+    value = training_config.get(key)
     if value is None:
         return None
     feature = Path(value)
@@ -120,6 +122,9 @@ def save_checkpoint(
             "model_config": asdict(config),
             "training_config": _json_value(training_config),
             "feature_identity": _feature_identity(training_config),
+            "evaluation_feature_identity": _feature_identity(
+                training_config, "eval_features"
+            ),
             "files": files,
         }
         (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -164,6 +169,7 @@ def load_checkpoint(
         "sequence_length",
         "learning_rate",
         "lr_decay",
+        "gamma",
         "seed",
         "training_chunk_length",
         "stateful_tbptt",
@@ -176,6 +182,16 @@ def load_checkpoint(
     ]
     if mismatches:
         raise ValueError(f"checkpoint training configuration differs: {', '.join(mismatches)}")
+    saved_eval_identity = manifest.get("evaluation_feature_identity")
+    current_eval_identity = _feature_identity(training_config, "eval_features")
+    saved_eval_path = saved_config.get("eval_features")
+    current_eval_path = current_config.get("eval_features")
+    if saved_eval_identity is None:
+        evaluation_matches = saved_eval_path == current_eval_path
+    else:
+        evaluation_matches = saved_eval_identity == current_eval_identity
+    if not evaluation_matches:
+        raise ValueError("checkpoint evaluation features differ")
     model.load_weights(str(checkpoint / "model.safetensors"))
     optimizer.state = tree_unflatten(mx.load(str(checkpoint / "optimizer.safetensors")))
     # MLX keeps an internal reference to this list. Rebinding the public

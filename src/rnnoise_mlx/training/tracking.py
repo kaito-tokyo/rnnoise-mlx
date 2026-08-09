@@ -146,12 +146,15 @@ class MLflowTracker:
                 }
             )
         atexit.register(self.fail_if_open)
+        chapter = int(parameters.get("resume_update", 0))
+        chapter_namespace = f"chapter-{chapter:08d}"
         run_config = output / "run-config.json"
         run_config.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n")
-        mlflow.log_artifact(str(run_config), artifact_path="provenance")
-        chapter = int(parameters.get("resume_update", 0))
+        mlflow.log_artifact(
+            str(run_config), artifact_path=f"provenance/{chapter_namespace}"
+        )
         self.log_provenance_artifacts(
-            provenance_artifacts or [], namespace=f"chapter-{chapter:08d}"
+            provenance_artifacts or [], namespace=chapter_namespace
         )
 
     @property
