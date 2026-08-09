@@ -210,13 +210,15 @@ def musan_records(corpus: Path) -> list[dict[str, Any]]:
                 record["accepted"] = False
                 record["exclusion_reasons"].extend(failures)
         candidates.append(record)
+    return _apply_musan_cap(candidates)
+
+
+def _apply_musan_cap(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     passing = sorted(
         (row for row in candidates if row["accepted"]),
         key=lambda row: stable_score(row["identity"], "musan-selection"),
     )
-    train = [row for row in passing if row["split"] == "train"]
-    evaluation = [row for row in passing if row["split"] == "eval"]
-    selected = {row["identity"] for row in train[:7] + evaluation[:1]}
+    selected = {row["identity"] for row in passing[:8]}
     for record in candidates:
         if record["accepted"] and record["identity"] not in selected:
             record["accepted"] = False
@@ -282,10 +284,37 @@ def validate_splittable_categories(records: list[dict[str, Any]]) -> None:
         )
 
 
+def validate_render_splits(records: list[dict[str, Any]]) -> None:
+    """Require every renderer input group before any output is written."""
+    required_categories = BACKGROUND_WEIGHTS.keys() | FOREGROUND_WEIGHTS.keys()
+    missing = []
+    for split in ("train", "eval"):
+        for category in required_categories:
+            if not any(
+                row["accepted"]
+                and row["split"] == split
+                and row["category"] == category
+                for row in records
+            ):
+                missing.append(f"{split}:{category}")
+        for pressure in PRESSURES:
+            source = f"multi-pressure-{pressure.lower()}"
+            if not any(
+                row["accepted"]
+                and row["split"] == split
+                and row["source"] == source
+                for row in records
+            ):
+                missing.append(f"{split}:{source}")
+    if missing:
+        raise ValueError("missing render groups: " + ", ".join(missing))
+
+
 def audit(corpus: Path, output: Path) -> dict[str, Any]:
     records = dns_records(corpus) + mka_records(corpus) + multi_pressure_records(corpus) + musan_records(corpus)
     validate_splittable_categories(records)
     stratify_splits(records)
+    validate_render_splits(records)
     accepted = [row for row in records if row["accepted"]]
     identities: dict[str, set[str]] = defaultdict(set)
     for row in accepted:
@@ -403,6 +432,7 @@ def render(audit_path: Path, output: Path, train_hours: float, eval_hours: float
             )
     report = json.loads(audit_path.read_text())
     accepted = [row for row in report["records"] if row["accepted"]]
+    validate_render_splits(accepted)
     manifests: dict[str, Any] = {}
     for split, hours in (("train", train_hours), ("eval", eval_hours)):
         rows = [row for row in accepted if row["split"] == split]

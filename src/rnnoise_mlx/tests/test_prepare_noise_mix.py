@@ -5,6 +5,7 @@ import numpy as np
 
 from rnnoise_mlx.tools.prepare_noise_mix import (
     PRESSURES,
+    _apply_musan_cap,
     _allocate,
     _cycle_chunks,
     _multi_pressure_chunks,
@@ -13,6 +14,7 @@ from rnnoise_mlx.tools.prepare_noise_mix import (
     split_for,
     stratify_splits,
     validate_splittable_categories,
+    validate_render_splits,
 )
 
 
@@ -88,6 +90,56 @@ def test_weighted_category_requires_two_identities():
         assert removed_category in str(error)
     else:
         raise AssertionError("unsplittable category was accepted")
+
+
+def test_musan_cap_is_independent_of_provisional_split():
+    records = [
+        {
+            "accepted": True,
+            "identity": f"musan-{index}",
+            "split": "eval",
+            "exclusion_reasons": [],
+        }
+        for index in range(10)
+    ]
+    _apply_musan_cap(records)
+    assert sum(row["accepted"] for row in records) == 8
+
+
+def test_render_validation_requires_each_pressure_in_both_splits():
+    records = []
+    for split in ("train", "eval"):
+        for category in {
+            "dns_typing", "dns_door", "dns_squeak", "dns_dragging",
+            "dns_copy-machine", "dns_human", "mka", "multi_pressure",
+            "dns_fan", "musan_curated",
+        }:
+            records.append({
+                "accepted": True,
+                "split": split,
+                "category": category,
+                "source": "placeholder",
+            })
+        for pressure in PRESSURES:
+            records.append({
+                "accepted": True,
+                "split": split,
+                "category": "multi_pressure",
+                "source": f"multi-pressure-{pressure.lower()}",
+            })
+    records = [
+        row for row in records
+        if not (
+            row["split"] == "eval"
+            and row["source"] == "multi-pressure-lowp"
+        )
+    ]
+    try:
+        validate_render_splits(records)
+    except ValueError as error:
+        assert "eval:multi-pressure-lowp" in str(error)
+    else:
+        raise AssertionError("missing pressure level was accepted")
 
 
 def test_metrics_measure_stationary_pcm(tmp_path):

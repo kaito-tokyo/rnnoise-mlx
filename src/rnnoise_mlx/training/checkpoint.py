@@ -187,7 +187,7 @@ def load_checkpoint(
     saved_eval_path = saved_config.get("eval_features")
     current_eval_path = current_config.get("eval_features")
     if saved_eval_identity is None:
-        evaluation_matches = saved_eval_path == current_eval_path
+        evaluation_matches = saved_eval_path is None and current_eval_path is None
     else:
         evaluation_matches = saved_eval_identity == current_eval_identity
     if not evaluation_matches:

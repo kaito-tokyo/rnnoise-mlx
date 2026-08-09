@@ -363,6 +363,44 @@ def test_legacy_checkpoint_without_feature_identity_resets_batch(tmp_path):
     assert state["next_batch"] == 0
 
 
+def test_legacy_checkpoint_without_evaluation_identity_is_rejected(tmp_path):
+    config, model, optimizer = _updated_model_and_optimizer()
+    parameters = _feature_parameters(tmp_path)
+    eval_dir = tmp_path / "eval"
+    eval_dir.mkdir()
+    eval_parameters = _feature_parameters(eval_dir, b"eval")
+    parameters["eval_features"] = eval_parameters["features"]
+    checkpoint = save_checkpoint(
+        tmp_path / "checkpoints",
+        model,
+        optimizer,
+        config,
+        update=5,
+        next_epoch=2,
+        next_batch=7,
+        processed_frames=100,
+        elapsed_seconds=1.0,
+        history=[],
+        training_config=parameters,
+    )
+    manifest_path = checkpoint / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["evaluation_feature_identity"]
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+    try:
+        load_checkpoint(
+            checkpoint,
+            RNNoise(config),
+            optim.AdamW(learning_rate=1e-3),
+            config,
+            parameters,
+        )
+    except ValueError as error:
+        assert "evaluation features differ" in str(error)
+    else:
+        raise AssertionError("unverifiable legacy evaluation was accepted")
+
+
 def test_checkpoint_manifest_is_json_serializable_with_paths(tmp_path):
     config, model, optimizer = _updated_model_and_optimizer()
     checkpoint = save_checkpoint(
