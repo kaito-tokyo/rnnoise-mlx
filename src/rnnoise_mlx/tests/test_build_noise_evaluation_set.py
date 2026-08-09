@@ -1,6 +1,6 @@
 import numpy as np
 
-from rnnoise_mlx.tools.build_noise_evaluation_set import mix_at_snr
+from rnnoise_mlx.tools.build_noise_evaluation_set import evaluation_groups, mix_at_snr
 
 
 def test_mix_at_snr_is_exact_and_avoids_clipping():
@@ -26,3 +26,47 @@ def test_mix_at_snr_scales_large_component_even_when_mixture_cancels():
         np.max(np.abs(mixture)),
     ) <= 0.99 + 1e-12
     np.testing.assert_allclose(mixture, clean_scaled + noise_scaled)
+
+
+def test_evaluation_groups_excludes_undecodable_rejected_musan():
+    records = []
+    categories = (
+        "dns_typing", "dns_door", "dns_squeak", "dns_dragging",
+        "dns_copy-machine", "dns_human", "dns_fan",
+    )
+    for category in categories:
+        records.append({
+            "accepted": True,
+            "split": "eval",
+            "category": category,
+            "source": "dns",
+            "relative_path": f"{category}.wav",
+        })
+    for source in (
+        "mka-lenovo", "mka-msi", "mka-mac", "mka-messenger", "mka-zoom",
+        "mka-hp", "multi-pressure-highp", "multi-pressure-mediump",
+        "multi-pressure-lowp",
+    ):
+        records.append({
+            "accepted": True,
+            "split": "eval",
+            "category": "mka" if source.startswith("mka-") else "multi_pressure",
+            "source": source,
+            "relative_path": f"{source}.wav",
+        })
+    records.extend([
+        {
+            "accepted": False,
+            "category": "musan_curated",
+            "relative_path": "broken.wav",
+            "exclusion_reasons": ["decode_error"],
+        },
+        {
+            "accepted": False,
+            "category": "musan_curated",
+            "relative_path": "quiet.wav",
+            "exclusion_reasons": ["activity_below_90pct"],
+        },
+    ])
+    selected = evaluation_groups({"records": records})
+    assert selected["musan-rejected"]["relative_path"] == "quiet.wav"

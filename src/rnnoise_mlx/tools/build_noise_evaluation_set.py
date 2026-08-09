@@ -78,7 +78,9 @@ def evaluation_groups(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
         groups[source] = [row for row in records if row["accepted"] and row["split"] == "eval" and row["source"] == source]
     groups["musan-rejected"] = [
         row for row in records
-        if row["category"] == "musan_curated" and not row["accepted"]
+        if row["category"] == "musan_curated"
+        and not row["accepted"]
+        and "decode_error" not in row.get("exclusion_reasons", [])
     ]
     missing = [name for name, rows in groups.items() if not rows]
     if missing:

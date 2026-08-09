@@ -19,6 +19,7 @@ import numpy as np
 
 SEED = 141
 RATE = 48_000
+SEQUENCE_SAMPLES = 2_000 * RATE // 100
 DNS_FOREGROUND_WEIGHTS = {
     "dns_typing": 20,
     "dns_door": 15,
@@ -77,6 +78,8 @@ def decode_48k(path: Path) -> np.ndarray:
 
 def metrics(path: Path) -> dict[str, Any]:
     samples, rate = _native_pcm(path)
+    if not len(samples):
+        raise ValueError("empty audio")
     values = samples.astype(np.float64) / 32768.0
     frame_size = max(1, round(rate * 0.01))
     frame_count = len(values) // frame_size
@@ -304,6 +307,8 @@ def _cycle_chunks(
     while written < sample_count:
         record = records[index % len(records)]
         audio = decode_48k(Path(record["path"]))
+        if not len(audio):
+            raise ValueError(f"decoded empty audio: {record['path']}")
         take = min(len(audio), sample_count - written)
         if take:
             yield audio[:take], record["relative_path"]
@@ -332,6 +337,8 @@ def _multi_pressure_chunks(
         record = pressure_records[indices[pressure] % len(pressure_records)]
         indices[pressure] += 1
         audio = decode_48k(Path(record["path"]))
+        if not len(audio):
+            raise ValueError(f"decoded empty audio: {record['path']}")
         silence = np.zeros(round(RATE * rng.uniform(0.2, 1.2)), dtype="<i2")
         for piece, source in ((audio, record["relative_path"]), (silence, None)):
             take = min(len(piece), sample_count - written)
@@ -365,6 +372,11 @@ def _write_pcm(
 
 
 def render(audit_path: Path, output: Path, train_hours: float, eval_hours: float) -> dict[str, Any]:
+    for split, hours in (("train", train_hours), ("eval", eval_hours)):
+        if round(hours * 3600 * RATE) < SEQUENCE_SAMPLES:
+            raise ValueError(
+                f"{split} render must contain at least one 20-second feature sequence"
+            )
     report = json.loads(audit_path.read_text())
     accepted = [row for row in report["records"] if row["accepted"]]
     manifests: dict[str, Any] = {}
