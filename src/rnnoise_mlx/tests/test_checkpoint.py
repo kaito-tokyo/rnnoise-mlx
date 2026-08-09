@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import mlx.core as mx
@@ -47,9 +48,22 @@ def _assert_tree_equal(left, right):
         assert mx.array_equal(left_flat[key], right_flat[key]).item(), key
 
 
+def _feature_parameters(tmp_path, content=b"features"):
+    feature = tmp_path / "train.f32"
+    feature.write_bytes(content)
+    (tmp_path / "train.manifest.json").write_text(json.dumps({
+        "output": {
+            "filename": feature.name,
+            "bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        }
+    }) + "\n")
+    return {"features": str(feature), "batch_size": 2, "sequence_length": 10}
+
+
 def test_complete_checkpoint_round_trip(tmp_path):
     config, model, optimizer = _updated_model_and_optimizer()
-    parameters = {"features": "train.f32", "batch_size": 2, "sequence_length": 10}
+    parameters = _feature_parameters(tmp_path)
     checkpoint = save_checkpoint(
         tmp_path,
         model,
@@ -102,7 +116,7 @@ def test_resumed_next_update_matches_uninterrupted_training(tmp_path):
     config, uninterrupted_model, uninterrupted_optimizer = (
         _updated_model_and_optimizer()
     )
-    parameters = {"features": "train.f32", "batch_size": 2, "sequence_length": 10}
+    parameters = _feature_parameters(tmp_path)
     checkpoint = save_checkpoint(
         tmp_path,
         uninterrupted_model,
@@ -239,6 +253,63 @@ def test_checkpoint_resets_nonzero_batch_for_new_features(tmp_path):
         dict(parameters, features="generation-1/train.f32"),
     )
     assert state["next_epoch"] == 2
+    assert state["next_batch"] == 0
+
+
+def test_checkpoint_resets_batch_when_same_path_feature_content_changes(tmp_path):
+    config, model, optimizer = _updated_model_and_optimizer()
+    parameters = _feature_parameters(tmp_path, b"generation-zero")
+    checkpoint = save_checkpoint(
+        tmp_path / "checkpoints",
+        model,
+        optimizer,
+        config,
+        update=5,
+        next_epoch=2,
+        next_batch=7,
+        processed_frames=100,
+        elapsed_seconds=1.0,
+        history=[],
+        training_config=parameters,
+    )
+    _feature_parameters(tmp_path, b"generation-one")
+    state = load_checkpoint(
+        checkpoint,
+        RNNoise(config),
+        optim.AdamW(learning_rate=1e-3),
+        config,
+        parameters,
+    )
+    assert state["next_batch"] == 0
+
+
+def test_legacy_checkpoint_without_feature_identity_resets_batch(tmp_path):
+    config, model, optimizer = _updated_model_and_optimizer()
+    parameters = _feature_parameters(tmp_path)
+    checkpoint = save_checkpoint(
+        tmp_path / "checkpoints",
+        model,
+        optimizer,
+        config,
+        update=5,
+        next_epoch=2,
+        next_batch=7,
+        processed_frames=100,
+        elapsed_seconds=1.0,
+        history=[],
+        training_config=parameters,
+    )
+    manifest_path = checkpoint / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["feature_identity"]
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+    state = load_checkpoint(
+        checkpoint,
+        RNNoise(config),
+        optim.AdamW(learning_rate=1e-3),
+        config,
+        parameters,
+    )
     assert state["next_batch"] == 0
 
 

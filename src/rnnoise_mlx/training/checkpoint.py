@@ -41,6 +41,29 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _feature_identity(training_config: dict[str, Any]) -> str | None:
+    value = training_config.get("features")
+    if value is None:
+        return None
+    feature = Path(value)
+    candidates = (
+        feature.with_suffix(".manifest.json"),
+        feature.parent / "manifest.json",
+    )
+    manifest_path = next((path for path in candidates if path.is_file()), None)
+    if manifest_path is None or not feature.is_file():
+        return None
+    manifest = json.loads(manifest_path.read_text())
+    output = manifest.get("output", {})
+    if (
+        output.get("filename") != feature.name
+        or output.get("bytes") != feature.stat().st_size
+        or not isinstance(output.get("sha256"), str)
+    ):
+        return None
+    return output["sha256"]
+
+
 def save_checkpoint(
     root: Path,
     model: RNNoise,
@@ -96,6 +119,7 @@ def save_checkpoint(
             "format_version": FORMAT_VERSION,
             "model_config": asdict(config),
             "training_config": _json_value(training_config),
+            "feature_identity": _feature_identity(training_config),
             "files": files,
         }
         (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -164,6 +188,12 @@ def load_checkpoint(
     state = json.loads((checkpoint / "trainer-state.json").read_text())
     if state.get("format_version") != FORMAT_VERSION:
         raise ValueError("trainer state format does not match")
-    if saved_config.get("features") != current_config.get("features"):
+    saved_feature_identity = manifest.get("feature_identity")
+    current_feature_identity = _feature_identity(training_config)
+    if (
+        saved_feature_identity is None
+        or current_feature_identity is None
+        or saved_feature_identity != current_feature_identity
+    ):
         state["next_batch"] = 0
     return state
