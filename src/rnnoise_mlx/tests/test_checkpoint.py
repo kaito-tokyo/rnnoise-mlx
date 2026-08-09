@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -273,6 +274,33 @@ def test_checkpoint_resets_batch_when_same_path_feature_content_changes(tmp_path
         training_config=parameters,
     )
     _feature_parameters(tmp_path, b"generation-one")
+    state = load_checkpoint(
+        checkpoint,
+        RNNoise(config),
+        optim.AdamW(learning_rate=1e-3),
+        config,
+        parameters,
+    )
+    assert state["next_batch"] == 0
+
+
+def test_checkpoint_rejects_stale_manifest_for_same_size_feature(tmp_path):
+    config, model, optimizer = _updated_model_and_optimizer()
+    parameters = _feature_parameters(tmp_path, b"old-bytes")
+    checkpoint = save_checkpoint(
+        tmp_path / "checkpoints",
+        model,
+        optimizer,
+        config,
+        update=5,
+        next_epoch=2,
+        next_batch=7,
+        processed_frames=100,
+        elapsed_seconds=1.0,
+        history=[],
+        training_config=parameters,
+    )
+    Path(parameters["features"]).write_bytes(b"new-bytes")
     state = load_checkpoint(
         checkpoint,
         RNNoise(config),

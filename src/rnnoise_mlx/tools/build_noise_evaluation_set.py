@@ -50,6 +50,15 @@ def write_wav(path: Path, audio: np.ndarray) -> None:
         wav.writeframes(pcm.tobytes())
 
 
+def output_record(path: Path) -> dict[str, Any]:
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {
+        "path": str(path.resolve()),
+        "bytes": path.stat().st_size,
+        "sha256": digest,
+    }
+
+
 def mix_at_snr(clean: np.ndarray, noise: np.ndarray, snr_db: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     clean_rms = np.sqrt(np.mean(clean * clean) + 1e-20)
     noise_rms = np.sqrt(np.mean(noise * noise) + 1e-20)
@@ -115,7 +124,7 @@ def build(audit_path: Path, clean_path: Path, output: Path) -> dict[str, Any]:
                 "snr_db": snr,
                 "source": record["relative_path"],
                 "source_identity": record["identity"],
-                "paths": {name: str(path.resolve()) for name, path in paths.items()},
+                "outputs": {name: output_record(path) for name, path in paths.items()},
             })
     clean_only = output / "clean-only.wav"
     peak = np.max(np.abs(clean), initial=0)
@@ -128,7 +137,7 @@ def build(audit_path: Path, clean_path: Path, output: Path) -> dict[str, Any]:
         "snrs_db": list(SNRS),
         "audit": str(audit_path.resolve()),
         "clean_source": str(clean_path.resolve()),
-        "clean_only": str(clean_only.resolve()),
+        "clean_only": output_record(clean_only),
         "cases": cases,
     }
     output.mkdir(parents=True, exist_ok=True)

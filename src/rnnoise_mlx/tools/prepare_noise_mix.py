@@ -357,9 +357,15 @@ def _cycle_chunks(
         raise ValueError("cannot render an empty category")
     written = 0
     index = 0
+    verified: set[Path] = set()
     while written < sample_count:
         record = records[index % len(records)]
-        audio = decode_48k(Path(record["path"]))
+        path = Path(record["path"])
+        if path not in verified:
+            if sha256_file(path) != record["sha256"]:
+                raise ValueError(f"audited source checksum differs: {path}")
+            verified.add(path)
+        audio = decode_48k(path)
         if not len(audio):
             raise ValueError(f"decoded empty audio: {record['path']}")
         take = min(len(audio), sample_count - written)
@@ -383,13 +389,19 @@ def _multi_pressure_chunks(
     rng = random.Random(stable_score(split, "multi-pressure-silence"))
     written = 0
     indices = Counter()
+    verified: set[Path] = set()
     order = ("highp", "mediump", "lowp")
     while written < sample_count:
         pressure = order[sum(indices.values()) % len(order)]
         pressure_records = by_pressure[pressure]
         record = pressure_records[indices[pressure] % len(pressure_records)]
         indices[pressure] += 1
-        audio = decode_48k(Path(record["path"]))
+        path = Path(record["path"])
+        if path not in verified:
+            if sha256_file(path) != record["sha256"]:
+                raise ValueError(f"audited source checksum differs: {path}")
+            verified.add(path)
+        audio = decode_48k(path)
         if not len(audio):
             raise ValueError(f"decoded empty audio: {record['path']}")
         silence = np.zeros(round(RATE * rng.uniform(0.2, 1.2)), dtype="<i2")

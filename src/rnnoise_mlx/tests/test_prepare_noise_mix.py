@@ -1,3 +1,4 @@
+import hashlib
 import wave
 from pathlib import Path
 
@@ -176,6 +177,7 @@ def test_multi_pressure_interleaves_pressure_and_silence(tmp_path, monkeypatch):
             "path": str(path),
             "relative_path": f"{directory}/key.wav",
             "identity": "key",
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         })
 
     monkeypatch.setattr(
@@ -197,12 +199,17 @@ def test_cycle_chunks_reports_only_consumed_sources(tmp_path, monkeypatch):
         {
             "path": str(tmp_path / f"{index}.wav"),
             "relative_path": f"{index}.wav",
+            "sha256": "unused",
         }
         for index in range(3)
     ]
     monkeypatch.setattr(
         "rnnoise_mlx.tools.prepare_noise_mix.decode_48k",
         lambda path: np.full(10, int(path.stem), dtype="<i2"),
+    )
+    monkeypatch.setattr(
+        "rnnoise_mlx.tools.prepare_noise_mix.sha256_file",
+        lambda path: "unused",
     )
     rendered = list(_cycle_chunks(records, 5))
     assert [source for _, source in rendered] == ["0.wav"]
@@ -212,10 +219,15 @@ def test_cycle_chunks_rejects_empty_decode(tmp_path, monkeypatch):
     record = {
         "path": str(tmp_path / "empty.wav"),
         "relative_path": "empty.wav",
+        "sha256": "unused",
     }
     monkeypatch.setattr(
         "rnnoise_mlx.tools.prepare_noise_mix.decode_48k",
         lambda path: np.empty(0, dtype="<i2"),
+    )
+    monkeypatch.setattr(
+        "rnnoise_mlx.tools.prepare_noise_mix.sha256_file",
+        lambda path: "unused",
     )
     try:
         list(_cycle_chunks([record], 1))
@@ -223,6 +235,26 @@ def test_cycle_chunks_rejects_empty_decode(tmp_path, monkeypatch):
         assert "decoded empty audio" in str(error)
     else:
         raise AssertionError("empty decode was accepted")
+
+
+def test_cycle_chunks_rejects_source_changed_after_audit(tmp_path, monkeypatch):
+    path = tmp_path / "source.wav"
+    path.write_bytes(b"changed")
+    record = {
+        "path": str(path),
+        "relative_path": "source.wav",
+        "sha256": "old-digest",
+    }
+    monkeypatch.setattr(
+        "rnnoise_mlx.tools.prepare_noise_mix.decode_48k",
+        lambda path: np.ones(1, dtype="<i2"),
+    )
+    try:
+        list(_cycle_chunks([record], 1))
+    except ValueError as error:
+        assert "checksum differs" in str(error)
+    else:
+        raise AssertionError("changed audited source was accepted")
 
 
 def test_render_requires_one_complete_feature_sequence_per_split(tmp_path):

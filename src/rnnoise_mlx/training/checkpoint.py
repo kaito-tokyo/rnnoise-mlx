@@ -63,6 +63,8 @@ def _feature_identity(
         or not isinstance(output.get("sha256"), str)
     ):
         return None
+    if _sha256(feature) != output["sha256"]:
+        return None
     return output["sha256"]
 
 

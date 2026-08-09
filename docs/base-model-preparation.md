@@ -169,7 +169,9 @@ manifest. Re-publishing the same valid generation reuses it.
 ## Provenance checklist
 
 - Archive filenames and SHA-256 values
-- Dataset versions and licenses for LibriTTS-R, MUSAN, and RIRS_NOISES
+- Dataset versions, source references, licenses, and required attributions for
+  LibriTTS-R, MUSAN, RIRS_NOISES, DNS Challenge 5 Freesound, MKA version 3,
+  and the Multi-Pressure Keyboard dataset version v8
 - Pinned RNNoise source revision
 - Every manifest and `manifest.json`
 - Feature counts, training command, seed, and repository commit

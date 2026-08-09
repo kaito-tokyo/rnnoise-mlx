@@ -6,6 +6,28 @@ eight automatically qualified files from MUSAN's annotated background list are
 retained as a small background supplement. OpenSLR RIRs remain spatial
 augmentation and are not treated as noise.
 
+## Source versions and licenses
+
+- **DNS Challenge 5 Freesound noise**: the ICASSP 2023 DNS Challenge 5
+  distribution from the
+  [Microsoft DNS-Challenge repository](https://github.com/microsoft/DNS-Challenge).
+  The upstream dataset license list states that only CC0 Freesound files were
+  selected; those files are licensed under
+  [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+- **Multi-Keyboard Acoustic (MKA) Datasets**: Mendeley Data version 3,
+  DOI [`10.17632/bpt2hvf8n3.3`](https://doi.org/10.17632/bpt2hvf8n3.3),
+  licensed under
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- **Audio dataset of keyboard keystrokes** (the Multi-Pressure source):
+  Zenodo version v8, DOI
+  [`10.5281/zenodo.19453177`](https://doi.org/10.5281/zenodo.19453177),
+  licensed under
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+Preserve each downloaded archive filename and checksum with the release
+provenance. CC BY sources require attribution to the creators in distributions
+and accompanying model documentation.
+
 ## Audit and render
 
 The audit is deterministic (seed 141), preserves the source files, removes MKA

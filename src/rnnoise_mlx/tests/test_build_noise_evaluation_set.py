@@ -1,6 +1,12 @@
+import hashlib
+
 import numpy as np
 
-from rnnoise_mlx.tools.build_noise_evaluation_set import evaluation_groups, mix_at_snr
+from rnnoise_mlx.tools.build_noise_evaluation_set import (
+    evaluation_groups,
+    mix_at_snr,
+    output_record,
+)
 
 
 def test_mix_at_snr_is_exact_and_avoids_clipping():
@@ -70,3 +76,14 @@ def test_evaluation_groups_excludes_undecodable_rejected_musan():
     ])
     selected = evaluation_groups({"records": records})
     assert selected["musan-rejected"]["relative_path"] == "quiet.wav"
+
+
+def test_output_record_binds_evaluation_wav_bytes(tmp_path):
+    path = tmp_path / "case.wav"
+    path.write_bytes(b"wav-bytes")
+    record = output_record(path)
+    assert record == {
+        "path": str(path.resolve()),
+        "bytes": 9,
+        "sha256": hashlib.sha256(b"wav-bytes").hexdigest(),
+    }
