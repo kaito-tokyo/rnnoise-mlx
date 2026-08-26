@@ -11,6 +11,7 @@ import argparse
 import collections
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -56,6 +57,13 @@ def exact_targets(total_samples: int, sources: list[dict[str, object]]) -> dict[
     for index in order[:remainder]:
         floors[index] += 1
     return {str(source["name"]): floors[index] for index, source in enumerate(sources)}
+
+
+def resolve_config_path(value: object) -> Path:
+    expanded = os.path.expandvars(str(value))
+    if "$" in expanded:
+        raise ValueError(f"configuration path contains an unset variable: {value}")
+    return Path(expanded).expanduser().resolve()
 
 
 def stable_audio_paths(root: Path, namespace: str) -> list[Path]:
@@ -157,7 +165,7 @@ def render_split(
         for source in sources:
             assert isinstance(source, dict)
             name = str(source["name"])
-            path = Path(str(source[split])).expanduser().resolve()
+            path = resolve_config_path(source[split])
             source_type = str(source.get(f"{split}_type", source.get("type", "audio-directory")))
             target = targets[name]
             if source_type == "pcm-s16le-48k-mono":
@@ -203,7 +211,7 @@ def link_augmentation(source: Path, output: Path) -> dict[str, str]:
         if not origin.is_file():
             raise ValueError(f"missing augmentation input: {origin}")
         destination = output / name
-        destination.symlink_to(origin)
+        destination.symlink_to(os.path.relpath(origin, destination.parent))
         linked[name] = str(origin)
     return linked
 

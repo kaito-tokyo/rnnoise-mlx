@@ -90,6 +90,11 @@ def main():
     )
     parser.add_argument("--checkpoint-every", type=int, default=32)
     parser.add_argument(
+        "--mlflow-log-checkpoints",
+        action="store_true",
+        help="also copy complete checkpoints to MLflow artifacts",
+    )
+    parser.add_argument(
         "--provenance-artifact",
         action="append",
         type=Path,
@@ -442,7 +447,8 @@ def main():
                     feature_identity=verified_feature_identity,
                     evaluation_feature_identity=verified_evaluation_feature_identity,
                 )
-                tracker.log_checkpoint(checkpoint, update)
+                if args.mlflow_log_checkpoints:
+                    tracker.log_checkpoint(checkpoint, update)
                 checkpoint_due = False
             if args.max_updates is not None and update >= args.max_updates:
                 break

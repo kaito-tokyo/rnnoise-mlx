@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 from typing import Any
+from urllib.parse import urlparse
 
 import mlflow
 from mlflow.tracking import MlflowClient
@@ -85,10 +86,22 @@ def _git_metadata(root: Path) -> dict[str, str]:
 def validate_tracking_target(
     tracking_uri: str, experiment: str, run_id: str | None = None
 ):
-    """Verify server access and, when resuming, the run's experiment."""
+    """Verify HTTP(S) server access and, when resuming, the run's experiment."""
+    parsed_uri = urlparse(tracking_uri)
+    if parsed_uri.scheme not in {"http", "https"} or not parsed_uri.netloc:
+        raise ValueError(
+            "MLflow tracking URI must be an HTTP(S) server; direct local "
+            "file and SQLite tracking are forbidden"
+        )
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
-    client.search_experiments(max_results=1)
+    try:
+        client.search_experiments(max_results=1)
+    except Exception as error:
+        raise ConnectionError(
+            f"MLflow Tracking Server is unavailable at {tracking_uri}; "
+            "training aborted without tracking-store fallback"
+        ) from error
     if run_id is None:
         return None
     selected_experiment = client.get_experiment_by_name(experiment)
@@ -103,7 +116,7 @@ def validate_tracking_target(
 
 
 class MLflowTracker:
-    """Own one remote MLflow run and finalize it on success or failure."""
+    """Own one HTTP(S)-served MLflow run and finalize it on success or failure."""
 
     def __init__(
         self,

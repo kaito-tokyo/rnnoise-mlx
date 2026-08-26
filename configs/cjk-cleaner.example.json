@@ -6,21 +6,21 @@
     {
       "name": "jpn-kokoro",
       "weight": 20,
-      "train": "/Users/umireon/Datasets/kokoro/train",
-      "eval": "/Users/umireon/Datasets/kokoro/eval",
+      "train": "${RNNOISE_MLX_STORAGE_ROOT}/datasets/selections/kokoro/train",
+      "eval": "${RNNOISE_MLX_STORAGE_ROOT}/datasets/selections/kokoro/eval",
       "type": "audio-directory"
     },
     {
       "name": "cmn-aishell3",
       "weight": 40,
-      "train": "/Users/umireon/Datasets/rnnoise-mlx-multilingual-corpus-20260713/prepared/aishell3-selection/train-48k-mono.pcm",
+      "train": "${RNNOISE_MLX_STORAGE_ROOT}/datasets/sources/rnnoise-mlx-multilingual-corpus-20260713/prepared/aishell3-selection/train-48k-mono.pcm",
       "eval": "/Users/umireon/Datasets/rnnoise-mlx-multilingual-corpus-20260713/prepared/aishell3-selection/eval-48k-mono.pcm",
       "type": "pcm-s16le-48k-mono"
     },
     {
       "name": "kor-zeroth",
       "weight": 40,
-      "train": "/Users/umireon/Datasets/rnnoise-mlx-multilingual-corpus-20260713/prepared/zeroth-korean-selection/train",
+      "train": "${RNNOISE_MLX_STORAGE_ROOT}/datasets/sources/rnnoise-mlx-multilingual-corpus-20260713/prepared/zeroth-korean-selection/train",
       "eval": "/Users/umireon/Datasets/rnnoise-mlx-multilingual-corpus-20260713/prepared/zeroth-korean-selection/eval",
       "type": "audio-directory"
     }

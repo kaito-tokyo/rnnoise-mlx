@@ -24,4 +24,6 @@ def test_split_creates_symlinks_and_manifest(tmp_path: Path):
     assert manifest["counts"]["eval"] > 0
     assert len(list(output.rglob("*.flac"))) == 20
     assert all(path.is_symlink() for path in output.rglob("*.flac"))
+    assert all(not path.readlink().is_absolute() for path in output.rglob("*.flac"))
+    assert all(path.resolve().is_file() for path in output.rglob("*.flac"))
     assert (output / "split-manifest.json").is_file()

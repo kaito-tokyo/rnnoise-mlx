@@ -3,11 +3,25 @@ from pathlib import Path
 
 from rnnoise_mlx.tools.prepare_speech_mix import (
     exact_targets,
+    resolve_config_path,
     render_split,
     stable_audio_paths,
     write_audio_directory,
     write_pcm_prefix,
 )
+
+
+def test_resolve_config_path_expands_environment(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("RNNOISE_MLX_STORAGE_ROOT", str(tmp_path))
+    assert resolve_config_path("${RNNOISE_MLX_STORAGE_ROOT}/data") == tmp_path / "data"
+
+
+def test_resolve_config_path_rejects_unset_variable(monkeypatch):
+    monkeypatch.delenv("RNNOISE_MLX_MISSING", raising=False)
+    import pytest
+
+    with pytest.raises(ValueError, match="unset variable"):
+        resolve_config_path("${RNNOISE_MLX_MISSING}/data")
 
 
 def test_exact_targets_sum_exactly_and_are_order_independent():

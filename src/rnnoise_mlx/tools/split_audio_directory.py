@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from rnnoise_mlx.tools.prepare_speech_mix import AUDIO_SUFFIXES
@@ -32,7 +33,7 @@ def split(source: Path, output: Path, eval_fraction: float, seed: int) -> dict[s
         target_split = assignment(relative, eval_fraction, seed)
         destination = output / target_split / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.symlink_to(path)
+        destination.symlink_to(os.path.relpath(path, destination.parent))
         counts[target_split] += 1
         records.append({"path": relative, "split": target_split})
     manifest = {
