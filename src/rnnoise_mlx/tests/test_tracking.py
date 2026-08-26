@@ -108,6 +108,35 @@ def test_validate_tracking_target_does_not_start_or_update_run(monkeypatch):
     assert calls == []
 
 
+@pytest.mark.parametrize(
+    "tracking_uri",
+    ["./mlruns", "file:///tmp/mlruns", "sqlite:///tmp/mlflow.db"],
+)
+def test_validate_tracking_target_rejects_local_store(tracking_uri, monkeypatch):
+    monkeypatch.setattr(
+        tracking.mlflow,
+        "set_tracking_uri",
+        lambda uri: pytest.fail("direct local tracking URI must be rejected before use"),
+    )
+
+    with pytest.raises(ValueError, match="direct local file and SQLite tracking"):
+        tracking.validate_tracking_target(tracking_uri, "rnnoise-mlx")
+
+
+def test_validate_tracking_target_aborts_when_server_is_unavailable(monkeypatch):
+    class UnavailableClient:
+        def search_experiments(self, max_results):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(tracking, "MlflowClient", UnavailableClient)
+    monkeypatch.setattr(tracking.mlflow, "set_tracking_uri", lambda uri: None)
+
+    with pytest.raises(
+        ConnectionError, match="training aborted without tracking-store fallback"
+    ):
+        tracking.validate_tracking_target("http://mlflow.test", "rnnoise-mlx")
+
+
 def test_tracker_rejects_run_from_another_experiment(tmp_path, monkeypatch):
     _mock_mlflow(monkeypatch, experiment_id="experiment-2")
 

@@ -8,7 +8,7 @@
       "name": "english-20h-and-official-multilingual-50h",
       "train_weight": 70,
       "eval_weight": 40,
-      "train": "/Users/umireon/Worktrees/rnnoise-mlx-multilingual-20k-20260714/data/mixed-speech/train_speech.pcm",
+      "train": "${RNNOISE_MLX_STORAGE_ROOT}/datasets/prepared/noise-mix/experiment-prepared/train_speech.pcm",
       "eval": "/Users/umireon/Worktrees/rnnoise-mlx-base-10k-20260712-rerun2/data/prepared/eval_speech.pcm",
       "type": "pcm-s16le-48k-mono"
     },
@@ -25,7 +25,7 @@
       "name": "cmn-aishell3",
       "train_weight": 6,
       "eval_weight": 20,
-      "train": "/Users/umireon/Datasets/rnnoise-mlx-multilingual-corpus-20260713/prepared/aishell3-selection/train-48k-mono.pcm",
+      "train": "${RNNOISE_MLX_STORAGE_ROOT}/datasets/sources/rnnoise-mlx-multilingual-corpus-20260713/prepared/aishell3-selection/train-48k-mono.pcm",
       "eval": "/Users/umireon/Datasets/rnnoise-mlx-multilingual-corpus-20260713/prepared/aishell3-selection/eval-48k-mono.pcm",
       "type": "pcm-s16le-48k-mono"
     },
@@ -33,7 +33,7 @@
       "name": "kor-zeroth",
       "train_weight": 6,
       "eval_weight": 20,
-      "train": "/Users/umireon/Datasets/rnnoise-mlx-multilingual-corpus-20260713/prepared/zeroth-korean-selection/train",
+      "train": "${RNNOISE_MLX_STORAGE_ROOT}/datasets/sources/rnnoise-mlx-multilingual-corpus-20260713/prepared/zeroth-korean-selection/train",
       "eval": "/Users/umireon/Datasets/rnnoise-mlx-multilingual-corpus-20260713/prepared/zeroth-korean-selection/eval",
       "type": "audio-directory"
     }

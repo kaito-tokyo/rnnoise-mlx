@@ -61,6 +61,30 @@ frames.
 The current corpus-cleaning and promoted-training parameters are documented in
 [the CJK two-stage procedure](docs/cjk-two-stage-training.md).
 
+## Common Voice Japanese cleanup
+
+The Common Voice Japanese cleanup tool uses the model-free SpeexDSP
+preprocessor. It decodes each selected clip to 48 kHz mono PCM, resets the
+preprocessor for every clip, applies denoising with AGC, VAD, dereverb, and echo
+cancellation disabled, then trims to the requested margin before measured
+speech onset. Install `ffmpeg` and `speexdsp` (for example with Homebrew), then
+run:
+
+```sh
+brew install ffmpeg speexdsp
+.venv/bin/python -m rnnoise_mlx.tools.cleanup_common_voice_ja \
+  "$DATASET/prepared/cv26-ja-selection" data/cv26-ja-speex-clean \
+  --filter-manifest data/cv26-ja-onsets/filter-manifest.json \
+  --noise-suppress-db -12 --margin-ms 150 --workers 4 --resume
+```
+
+Inputs may reside below `/Volumes`. Outputs may use the registered portable
+training volume after its UUID preflight; other external volumes remain
+rejected. `cleanup-manifest.json` records
+the parameters and SHA-256 digests of the filter manifest, SpeexDSP library,
+inputs, and outputs. SpeexDSP is BSD-3-Clause; preserve its `COPYING` notice
+when redistributing the library or a binary containing it.
+
 The training command requires an MLflow tracking URI and experiment, plus either
 a run name for a new run or a run ID for an existing run.
 It checks the server before evaluation or optimization, logs loss every ten
@@ -95,6 +119,10 @@ rounded up to that safe boundary.
 
 `data/`, `runs/`, `experiments/`, `.venv/`, and `.build/` are not tracked.
 Store SafeTensors models, evaluation JSON, and generated WAV files there.
+Use the registered portable volume described in
+[the storage runbook](docs/portable-training-storage.md) for active datasets,
+features, checkpoints, and local MLflow. `/Volumes/doc-*` remains optional
+corpus input and verified cold archival after the run stops.
 
 ## Tests and builds
 
