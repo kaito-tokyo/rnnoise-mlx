@@ -6,6 +6,7 @@ __pycache__/
 runs/
 experiments/
 data/
+colab/*.ipynb_checkpoints/
 Vendors/xiph-rnnoise/dump_features
 .build/
 DerivedData/
