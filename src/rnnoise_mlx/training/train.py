@@ -215,6 +215,7 @@ def main():
         Path(args.features),
         Path(args.eval_features) if args.eval_features else None,
         args.resume_from,
+        *args.provenance_artifact,
     )
     provenance_artifacts = list(args.provenance_artifact)
     for feature_path in (Path(args.features), args.eval_features):
@@ -276,6 +277,15 @@ def main():
             json.dumps({"resumed_from": str(args.resume_from), "update": update}),
             flush=True,
         )
+    stop_requested = False
+
+    def request_stop(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
+
     tracker_parameters = {**vars(args), "resume_update": update if args.resume_from else 0}
     tracker = MLflowTracker(
         args.mlflow_tracking_uri,
@@ -298,6 +308,17 @@ def main():
             else None
         )
         tracker.log_evaluation("initial", initial_evaluation, 0)
+    if stop_requested:
+        summary = {
+            "updates": update,
+            "stop_requested": True,
+            "training_seconds": elapsed_before_resume,
+            "processed_frames": processed_frames,
+            "history": history,
+        }
+        (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
+        tracker.pause(summary, output)
+        return
 
     def objective(model, features, gain, vad):
         pred_gain, pred_vad, _ = model(features)
@@ -451,14 +472,6 @@ def main():
                 )
         pending_losses.clear()
 
-    stop_requested = False
-
-    def request_stop(signum, frame):
-        nonlocal stop_requested
-        stop_requested = True
-
-    signal.signal(signal.SIGINT, request_stop)
-    signal.signal(signal.SIGTERM, request_stop)
     checkpoint_due = False
 
     def commit_checkpoint(next_epoch: int, next_batch: int) -> None:
