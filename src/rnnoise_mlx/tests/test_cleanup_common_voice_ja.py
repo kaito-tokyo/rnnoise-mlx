@@ -82,6 +82,14 @@ def test_output_below_unregistered_volume_is_rejected():
         require_internal_output(Path("/Volumes/doc-2026-05-26/output"))
 
 
+def test_cleanup_rejects_dangling_output_symlink(tmp_path: Path):
+    output = tmp_path / "output"
+    output.symlink_to(tmp_path / "missing")
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        require_internal_output(output)
+
+
 def test_output_below_registered_training_volume_is_allowed(monkeypatch):
     monkeypatch.setenv("RNNOISE_MLX_STORAGE_ROOT", "/Volumes/rnnoise-mlx-train")
     monkeypatch.setattr(

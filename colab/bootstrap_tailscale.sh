@@ -44,6 +44,10 @@ export HTTP_PROXY=http://127.0.0.1:1055
 export HTTPS_PROXY=http://127.0.0.1:1055
 export http_proxy="$HTTP_PROXY"
 export https_proxy="$HTTPS_PROXY"
-curl --fail --silent --show-error --max-time 20 "$MLFLOW_TRACKING_URI/health"
-echo
+health_status=$(curl --fail --silent --show-error --max-time 20 \
+  --output /dev/null --write-out '%{http_code}' "$MLFLOW_TRACKING_URI/health")
+if [[ "$health_status" != 200 ]]; then
+  echo "MLflow health check returned HTTP $health_status" >&2
+  exit 1
+fi
 echo "Tailscale is ready. Set HTTP_PROXY and HTTPS_PROXY to http://127.0.0.1:1055 for MLflow clients."

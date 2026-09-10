@@ -131,7 +131,10 @@ def resolve_library(explicit: Path | None) -> Path:
 
 
 def require_internal_output(path: Path) -> Path:
-    resolved = path.expanduser().resolve()
+    path = path.expanduser()
+    if path.is_symlink():
+        raise ValueError(f"output path must not be a symlink: {path}")
+    resolved = path.resolve()
     if resolved == Path("/Volumes") or Path("/Volumes") in resolved.parents:
         from .portable_storage import DEFAULT_ROOT, load_volume_config
 
@@ -388,7 +391,10 @@ def main() -> None:
     from .portable_storage import registered_volume_for_paths, volume_operation_guard
 
     portable_root = registered_volume_for_paths(
-        [source_root, output_root, filter_manifest, library_path]
+        [
+            source_root, output_root, filter_manifest, library_path,
+            *((source_root / str(record["path"])).resolve() for record in records),
+        ]
     )
     with volume_operation_guard(portable_root) if portable_root else nullcontext():
         with cleanup_output_guard(output_root):
