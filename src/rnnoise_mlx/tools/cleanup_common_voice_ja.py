@@ -41,6 +41,7 @@ def json_write(path: Path, value: object) -> None:
 @contextmanager
 def cleanup_output_guard(output_root: Path):
     path = output_root.parent / f".{output_root.name}.cleanup.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
         yield

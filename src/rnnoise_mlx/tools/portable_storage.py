@@ -441,6 +441,23 @@ def finalize_verified_copy(
 ) -> dict[str, object]:
     """Finalize a tree after an external rsync checksum dry-run succeeds."""
     load_volume_config(root)
+    with volume_operation_guard(root):
+        return _finalize_verified_copy_locked(
+            root, temporary, destination, name=name, source=source,
+            files=files, total_bytes=total_bytes,
+        )
+
+
+def _finalize_verified_copy_locked(
+    root: Path,
+    temporary: Path,
+    destination: Path,
+    *,
+    name: str,
+    source: Path,
+    files: int,
+    total_bytes: int,
+) -> dict[str, object]:
     if temporary.parent != destination.parent:
         raise ValueError("temporary and destination must be siblings")
     if root not in destination.resolve().parents:
