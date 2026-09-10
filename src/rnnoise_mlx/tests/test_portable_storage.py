@@ -126,6 +126,21 @@ def test_copy_tree_rejects_destination_below_source(tmp_path):
         portable_storage.copy_tree(source, source / "copy", tmp_path / "copy.json")
 
 
+def test_copy_tree_preserves_directory_symlinks(tmp_path):
+    source = tmp_path / "source"
+    external = tmp_path / "external"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    external.mkdir()
+    (external / "file").write_bytes(b"payload")
+    (source / "linked").symlink_to(external, target_is_directory=True)
+
+    result = portable_storage.copy_tree(source, destination, tmp_path / "record.json")
+
+    assert result["matched"]
+    assert (destination / "linked").is_symlink()
+
+
 def test_copy_tree_cli_requires_destination_on_registered_volume(tmp_path, monkeypatch):
     root = tmp_path / "volume"
     source = tmp_path / "source"
@@ -183,6 +198,28 @@ def test_running_pid_accepts_matching_mlflow_server(tmp_path, monkeypatch):
     monkeypatch.setattr(portable_storage.subprocess, "run", lambda *args, **kwargs: result)
 
     assert portable_storage._running_pid(root) == 42
+
+
+def test_running_pid_requests_an_untruncated_command_line(tmp_path, monkeypatch):
+    root = tmp_path
+    database = root / "mlflow" / "mlflow.db"
+    database.parent.mkdir()
+    portable_storage._json_write(
+        root / "mlflow" / "mlflow.pid", {"pid": 42, "database": str(database.resolve())}
+    )
+    seen = []
+    result = type("Result", (), {
+        "returncode": 0,
+        "stdout": f"python -m mlflow server --backend-store-uri sqlite:///{database.resolve()}\n",
+    })()
+    monkeypatch.setattr(
+        portable_storage.subprocess,
+        "run",
+        lambda args, **kwargs: seen.append(args) or result,
+    )
+
+    assert portable_storage._running_pid(root) == 42
+    assert "-ww" in seen[0]
 
 
 def test_mlflow_failure_cleanup_preserves_another_process_pid_record(tmp_path):
@@ -249,6 +286,7 @@ def test_temporary_path_detection_does_not_match_ordinary_partial_names():
     assert portable_storage._is_temporary_path(Path("clip.partial.wav"))
     assert portable_storage._is_temporary_path(Path(".copy.partial-1"))
     assert portable_storage._is_temporary_path(Path(".record.tmp-1"))
+    assert portable_storage._is_temporary_path(Path(".checkpoint-download.tmp-1"))
     assert portable_storage._is_temporary_path(Path("archive.part"))
     assert not portable_storage._is_temporary_path(Path("partial_speech.wav"))
 

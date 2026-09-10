@@ -146,7 +146,7 @@ def _running_pid(root: Path) -> int | None:
         return None
     try:
         result = subprocess.run(
-            ["/bin/ps", "-p", str(pid), "-o", "command="],
+            ["/bin/ps", "-ww", "-p", str(pid), "-o", "command="],
             check=False,
             text=True,
             capture_output=True,
@@ -362,7 +362,7 @@ def copy_tree(source: Path, destination: Path, record: Path) -> dict[str, object
     if temporary.exists():
         raise FileExistsError(f"temporary destination already exists: {temporary}")
     temporary.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, temporary, copy_function=shutil.copy2)
+    shutil.copytree(source, temporary, copy_function=shutil.copy2, symlinks=True)
     try:
         result = verify_copy(source, temporary)
         os.replace(temporary, destination)

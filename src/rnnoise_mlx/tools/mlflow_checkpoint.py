@@ -106,7 +106,7 @@ def download_checkpoint(client, run_id: str, destination: Path, update: int | No
         raise FileNotFoundError("no committed MLflow checkpoint found")
     number, _, artifact, marker = max(candidates, key=lambda item: item[:3])
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".checkpoint-download-", dir=destination.parent) as work:
+    with tempfile.TemporaryDirectory(prefix=".checkpoint-download.tmp-", dir=destination.parent) as work:
         payload = Path(client.download_artifacts(run_id, artifact, work))
         if verify_checkpoint(payload, number) != marker["manifest_sha256"]:
             raise ValueError("downloaded checkpoint manifest differs")
