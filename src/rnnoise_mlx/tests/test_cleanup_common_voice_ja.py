@@ -110,6 +110,15 @@ def test_validate_records_rejects_duplicate_wav_outputs_and_missing_onsets():
     with pytest.raises(ValueError, match="same output"):
         validate_records(duplicate, -40)
 
+    with pytest.raises(ValueError, match="same output"):
+        validate_records(
+            [
+                {"path": "train/Clip.mp3", "onsets_seconds": {"-40": 0.1}},
+                {"path": "train/clip.flac", "onsets_seconds": {"-40": 0.2}},
+            ],
+            -40,
+        )
+
     with pytest.raises(ValueError, match="no onset"):
         validate_records([{"path": "train/clip.mp3", "onsets_seconds": {}}], -40)
 

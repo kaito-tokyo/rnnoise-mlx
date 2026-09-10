@@ -28,13 +28,12 @@ if ! pgrep -x tailscaled >/dev/null 2>&1; then
     >/tmp/tailscaled.log 2>&1 &
 fi
 
-pgrep -x tailscaled >/dev/null || {
-  cat /tmp/tailscaled.log >&2 || true
-  exit 1
-}
-
 for _ in $(seq 1 30); do
   tailscale status >/dev/null 2>&1 && break
+  if ! pgrep -x tailscaled >/dev/null 2>&1; then
+    cat /tmp/tailscaled.log >&2 || true
+    exit 1
+  fi
   sleep 1
 done
 tailscale status >/dev/null

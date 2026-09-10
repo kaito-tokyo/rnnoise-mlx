@@ -234,11 +234,12 @@ def validate_records(records: list[dict[str, Any]], threshold: float) -> None:
         if source.is_absolute() or ".." in source.parts:
             raise ValueError(f"input path escapes the corpus root: {source}")
         output = source.with_suffix(".wav")
-        if output in output_sources:
+        output_key = Path(output.as_posix().casefold())
+        if output_key in output_sources:
             raise ValueError(
-                f"accepted inputs map to the same output: {output_sources[output]} and {source}"
+                f"accepted inputs map to the same output: {output_sources[output_key]} and {source}"
             )
-        output_sources[output] = source
+        output_sources[output_key] = source
         try:
             onset = float(record["onsets_seconds"][threshold_key])
         except (KeyError, TypeError, ValueError):
@@ -384,18 +385,6 @@ def main() -> None:
     except (FileNotFoundError, OSError, ValueError) as error:
         parser.error(str(error))
 
-    missing = [str(record["path"]) for record in records
-               if not (source_root / str(record["path"])).is_file()]
-    if missing:
-        parser.error(f"accepted input clips are missing: {len(missing)} (first: {missing[0]})")
-    frame_size = args.sample_rate * args.frame_ms // 1000
-    margin_samples = round(args.margin_ms * args.sample_rate / 1000)
-    contract = cleanup_contract(
-        source_root, filter_manifest, library_path,
-        sample_rate=args.sample_rate, frame_size=frame_size, frame_ms=args.frame_ms,
-        noise_suppress_db=args.noise_suppress_db, threshold=args.threshold,
-        margin_samples=margin_samples,
-    )
     from .portable_storage import registered_volume_for_paths, volume_operation_guard
 
     portable_root = registered_volume_for_paths(
@@ -403,6 +392,18 @@ def main() -> None:
     )
     with cleanup_output_guard(output_root):
         with volume_operation_guard(portable_root) if portable_root else nullcontext():
+            missing = [str(record["path"]) for record in records
+                       if not (source_root / str(record["path"])).is_file()]
+            if missing:
+                parser.error(f"accepted input clips are missing: {len(missing)} (first: {missing[0]})")
+            frame_size = args.sample_rate * args.frame_ms // 1000
+            margin_samples = round(args.margin_ms * args.sample_rate / 1000)
+            contract = cleanup_contract(
+                source_root, filter_manifest, library_path,
+                sample_rate=args.sample_rate, frame_size=frame_size, frame_ms=args.frame_ms,
+                noise_suppress_db=args.noise_suppress_db, threshold=args.threshold,
+                margin_samples=margin_samples,
+            )
             try:
                 validate_input_digests(source_root, records)
             except ValueError as error:

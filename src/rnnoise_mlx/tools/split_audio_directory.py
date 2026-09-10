@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from contextlib import nullcontext
 
 from rnnoise_mlx.tools.prepare_speech_mix import AUDIO_SUFFIXES
 
@@ -25,8 +26,19 @@ def split(source: Path, output: Path, eval_fraction: float, seed: int) -> dict[s
     paths = sorted(
         path for path in source.rglob("*") if path.suffix.lower() in AUDIO_SUFFIXES
     )
+    from rnnoise_mlx.tools.portable_storage import registered_volume_for_paths, volume_operation_guard
+
+    portable_root = registered_volume_for_paths([source, output, *(path.resolve() for path in paths)])
+    with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        return _split_locked(source, output, paths, eval_fraction, seed)
+
+
+def _split_locked(
+    source: Path, output: Path, paths: list[Path], eval_fraction: float, seed: int
+) -> dict[str, object]:
     if not paths:
         raise ValueError(f"no audio files in {source}")
+    output.mkdir(parents=True, exist_ok=True)
     records = []
     counts = {"train": 0, "eval": 0}
     for path in paths:
@@ -59,7 +71,8 @@ def main() -> None:
     parser.add_argument("--eval-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, required=True)
     args = parser.parse_args()
-    args.output.mkdir(parents=True, exist_ok=False)
+    if args.output.exists():
+        parser.error(f"output already exists: {args.output}")
     print(json.dumps(split(args.source, args.output, args.eval_fraction, args.seed), indent=2))
 
 

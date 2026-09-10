@@ -350,6 +350,9 @@ def _tree_summary(path: Path, include_hashes: bool) -> dict[str, object]:
         if item.is_symlink():
             records.append({"path": relative, "type": "symlink", "target": os.readlink(item)})
             continue
+        if item.is_dir():
+            records.append({"path": relative, "type": "directory"})
+            continue
         if not item.is_file():
             continue
         size = item.stat().st_size
