@@ -203,6 +203,68 @@ def load_records(manifest_path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def cleanup_contract(
+    source_root: Path,
+    filter_manifest: Path,
+    library_path: Path,
+    *,
+    sample_rate: int,
+    frame_size: int,
+    frame_ms: int,
+    noise_suppress_db: int,
+    threshold: float,
+    margin_samples: int,
+) -> dict[str, Any]:
+    """Return every setting that determines a cleaned output."""
+    return {
+        "format_version": 1,
+        "tool": "speexdsp-preprocessor",
+        "input_root": str(source_root),
+        "filter_manifest": str(filter_manifest),
+        "filter_manifest_sha256": sha256(filter_manifest),
+        "speex_library": str(library_path),
+        "speex_library_sha256": sha256(library_path),
+        "sample_rate_hz": sample_rate,
+        "frame_size_samples": frame_size,
+        "frame_ms": frame_ms,
+        "noise_suppress_db": noise_suppress_db,
+        "denoise": True,
+        "agc": False,
+        "vad": False,
+        "dereverb": False,
+        "threshold_dbfs": threshold,
+        "margin_samples": margin_samples,
+    }
+
+
+def validate_resume(
+    output_root: Path, contract: dict[str, Any], source_root: Path, records: list[dict[str, Any]]
+) -> None:
+    """Reject partial or differently configured output before it is reused."""
+    manifest_path = output_root / "cleanup-manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError("--resume requires a complete cleanup-manifest.json")
+    previous = json.loads(manifest_path.read_text())
+    mismatches = [key for key, value in contract.items() if previous.get(key) != value]
+    if mismatches:
+        raise ValueError("--resume cleanup configuration differs: " + ", ".join(mismatches))
+    existing = {item.get("input"): item for item in previous.get("files", [])}
+    expected = {Path(str(record["path"])).as_posix() for record in records}
+    if set(existing) != expected:
+        raise ValueError("--resume accepted inputs differ from the completed output")
+    for relative in sorted(expected):
+        item = existing[relative]
+        source = source_root / relative
+        output = output_root / Path(relative).with_suffix(".wav")
+        if (
+            not output.is_file()
+            or item.get("input_sha256") != sha256(source)
+            or item.get("output") != output.relative_to(output_root).as_posix()
+            or item.get("output_sha256") != sha256(output)
+        ):
+            raise ValueError(f"--resume output verification failed: {relative}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="extracted Common Voice Japanese clips")
@@ -259,6 +321,17 @@ def main() -> None:
 
     frame_size = args.sample_rate * args.frame_ms // 1000
     margin_samples = round(args.margin_ms * args.sample_rate / 1000)
+    contract = cleanup_contract(
+        source_root, filter_manifest, library_path,
+        sample_rate=args.sample_rate, frame_size=frame_size, frame_ms=args.frame_ms,
+        noise_suppress_db=args.noise_suppress_db, threshold=args.threshold,
+        margin_samples=margin_samples,
+    )
+    if output_root.exists() and args.resume:
+        try:
+            validate_resume(output_root, contract, source_root, records)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            parser.error(str(error))
     output_root.mkdir(parents=True, exist_ok=args.resume)
     factory = lambda: speex.create(frame_size, args.sample_rate, args.noise_suppress_db)
     worker = lambda record: cleanup_one(
@@ -268,26 +341,7 @@ def main() -> None:
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         results = list(pool.map(worker, records))
 
-    manifest = {
-        "format_version": 1,
-        "tool": "speexdsp-preprocessor",
-        "input_root": str(source_root),
-        "filter_manifest": str(filter_manifest),
-        "filter_manifest_sha256": sha256(filter_manifest),
-        "speex_library": str(library_path),
-        "speex_library_sha256": sha256(library_path),
-        "sample_rate_hz": args.sample_rate,
-        "frame_size_samples": frame_size,
-        "frame_ms": args.frame_ms,
-        "noise_suppress_db": args.noise_suppress_db,
-        "denoise": True,
-        "agc": False,
-        "vad": False,
-        "dereverb": False,
-        "threshold_dbfs": args.threshold,
-        "margin_samples": margin_samples,
-        "files": results,
-    }
+    manifest = {**contract, "files": results}
     manifest_path = output_root / "cleanup-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     print(json.dumps({"cleaned_files": len(results), "output": str(output_root)}))
