@@ -239,7 +239,12 @@ def main() -> None:
     output = args.output.resolve()
     from .portable_storage import registered_volume_for_paths, volume_operation_guard
 
-    portable_root = registered_volume_for_paths([output])
+    guarded_paths = [output, args.specification.resolve(), args.augmentation_prepared.resolve()]
+    for configured in specification["sources"]:
+        assert isinstance(configured, dict)
+        for split in ("train", "eval"):
+            guarded_paths.append(resolve_config_path(configured[split]))
+    portable_root = registered_volume_for_paths(guarded_paths)
     with volume_operation_guard(portable_root) if portable_root else nullcontext():
         output.mkdir(parents=True, exist_ok=False)
         try:

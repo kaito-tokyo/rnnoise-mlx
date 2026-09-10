@@ -103,6 +103,21 @@ def test_pause_marks_run_killed_with_resumable_state(tmp_path, monkeypatch):
     assert tracker.closed
 
 
+def test_failure_marks_logical_status_failed(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tracking.mlflow, "set_tags", lambda tags: calls.append(("set_tags", tags)))
+    monkeypatch.setattr(
+        tracking.mlflow, "end_run", lambda **kwargs: calls.append(("end_run", kwargs))
+    )
+    tracker = object.__new__(tracking.MLflowTracker)
+    tracker.closed = False
+
+    tracker.fail_if_open()
+
+    assert ("set_tags", {"logical_status": "failed", "stop_requested": "false"}) in calls
+    assert ("end_run", {"status": "FAILED"}) in calls
+
+
 def test_resumed_run_config_uses_update_namespace(tmp_path, monkeypatch):
     calls = _mock_mlflow(monkeypatch)
     tracking.MLflowTracker(

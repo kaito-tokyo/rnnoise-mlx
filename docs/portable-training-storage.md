@@ -32,8 +32,9 @@ are disposable and must not be shared between machines. Install the pinned
 environment from `requirements-lock.txt`, then install this checkout editable:
 
 ```sh
-python3.13 -m venv "$RNNOISE_MLX_STORAGE_ROOT/runtime/$(hostname -s | tr '[:upper:]' '[:lower:]')/venv"
-VENV="$RNNOISE_MLX_STORAGE_ROOT/runtime/$(hostname -s | tr '[:upper:]' '[:lower:]')/venv"
+MACHINE_ID=$(python -m rnnoise_mlx.tools.portable_storage machine-id)
+VENV="$RNNOISE_MLX_STORAGE_ROOT/runtime/$MACHINE_ID/venv"
+python3.13 -m venv "$VENV"
 "$VENV/bin/pip" install -r requirements-lock.txt
 "$VENV/bin/pip" install --no-deps -e '.[dev]'
 ```

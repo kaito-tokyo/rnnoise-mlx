@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import fcntl
 import hashlib
 import json
@@ -389,6 +389,12 @@ def verify_copy(source: Path, destination: Path, record: Path | None = None) -> 
 
 
 def copy_tree(source: Path, destination: Path, record: Path) -> dict[str, object]:
+    portable_root = registered_volume_for_paths([destination])
+    with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        return _copy_tree_locked(source, destination, record)
+
+
+def _copy_tree_locked(source: Path, destination: Path, record: Path) -> dict[str, object]:
     source = source.resolve()
     destination = destination.resolve()
     if source == destination or source in destination.parents:
@@ -584,6 +590,7 @@ def main() -> None:
     parser.add_argument("--root", type=Path, default=Path(os.environ.get("RNNOISE_MLX_STORAGE_ROOT", DEFAULT_ROOT)))
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("init")
+    subparsers.add_parser("machine-id")
     subparsers.add_parser("preflight")
     start = subparsers.add_parser("mlflow-start")
     start.add_argument("--port", type=int, default=5000)
@@ -606,6 +613,9 @@ def main() -> None:
     subparsers.add_parser("eject-check")
     args = parser.parse_args()
 
+    if args.command == "machine-id":
+        print(machine_id())
+        return
     if args.command == "init":
         result = initialize(args.root)
     elif args.command == "preflight":

@@ -259,5 +259,6 @@ class MLflowTracker:
 
     def fail_if_open(self) -> None:
         if not self.closed:
+            mlflow.set_tags({"logical_status": "failed", "stop_requested": "false"})
             mlflow.end_run(status="FAILED")
             self.closed = True
