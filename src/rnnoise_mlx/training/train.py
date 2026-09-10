@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
 import json
+import os
 import signal
 from pathlib import Path
 import time
@@ -41,6 +43,28 @@ def _recover_initial_evaluation(output: Path, existing_run) -> dict | None:
         if summary.get("initial_evaluation") is not None:
             return summary["initial_evaluation"]
     return initial_evaluation_from_run(existing_run) if existing_run is not None else None
+
+
+def _register_training_lock(output: Path) -> None:
+    """Prevent eject-check from approving a volume with a live trainer."""
+    root_value = os.environ.get("RNNOISE_MLX_STORAGE_ROOT")
+    if not root_value:
+        return
+    root = Path(root_value).expanduser().resolve()
+    output = output.resolve()
+    if root not in output.parents:
+        return
+    lock = output / ".rnnoise-training.lock"
+    if lock.exists():
+        try:
+            previous = json.loads(lock.read_text())
+            os.kill(int(previous["pid"]), 0)
+        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            lock.unlink(missing_ok=True)
+        else:
+            raise RuntimeError(f"training output is already active: {output}")
+    lock.write_text(json.dumps({"pid": os.getpid()}) + "\n")
+    atexit.register(lock.unlink, missing_ok=True)
 
 
 def main():
@@ -132,6 +156,7 @@ def main():
         args.mlflow_tracking_uri, args.mlflow_experiment, args.mlflow_run_id
     )
     output.mkdir(parents=True, exist_ok=True)
+    _register_training_lock(output)
     provenance_artifacts = list(args.provenance_artifact)
     for feature_path in (Path(args.features), args.eval_features):
         if feature_path is None:

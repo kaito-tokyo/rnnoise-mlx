@@ -111,6 +111,22 @@ def test_running_pid_accepts_matching_mlflow_server(tmp_path, monkeypatch):
     assert portable_storage._running_pid(root) == 42
 
 
+def test_eject_check_rejects_live_training_lock(tmp_path, monkeypatch):
+    root = tmp_path
+    lock = root / "experiments" / "active" / "trial" / ".rnnoise-training.lock"
+    lock.parent.mkdir(parents=True)
+    portable_storage._json_write(lock, {"pid": 42})
+    (root / "inventory").mkdir()
+    portable_storage._json_write(root / "inventory" / "volume.json", {"format_version": 1})
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {"volume_uuid": "id", "minimum_free_bytes": 0})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+    monkeypatch.setattr(portable_storage, "sqlite_integrity", lambda database: "ok")
+    monkeypatch.setattr(portable_storage.os, "kill", lambda pid, signal: None)
+
+    with pytest.raises(RuntimeError, match="training is still running"):
+        portable_storage.eject_check(root)
+
+
 def test_finalize_verified_copy_renames_and_registers(tmp_path, monkeypatch):
     root = tmp_path
     temporary = root / "datasets" / ".source.partial"

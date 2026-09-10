@@ -354,6 +354,17 @@ def eject_check(root: Path) -> dict[str, object]:
     ]
     if partials:
         raise RuntimeError(f"incomplete temporary paths remain: {partials[:5]}")
+    live_training = []
+    for lock in (root / "experiments" / "active").rglob(".rnnoise-training.lock"):
+        try:
+            pid = int(json.loads(lock.read_text())["pid"])
+            os.kill(pid, 0)
+        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            lock.unlink(missing_ok=True)
+        else:
+            live_training.append(f"{lock.parent} (PID {pid})")
+    if live_training:
+        raise RuntimeError(f"training is still running: {live_training[:5]}")
     active_checkpoints = []
     for experiment in sorted((root / "experiments" / "active").iterdir()):
         if not experiment.is_dir():
