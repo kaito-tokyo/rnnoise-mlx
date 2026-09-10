@@ -364,6 +364,12 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def verify_copy(source: Path, destination: Path, record: Path | None = None) -> dict[str, object]:
+    portable_root = registered_volume_for_paths([source, destination])
+    with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        return _verify_copy_locked(source, destination, record)
+
+
+def _verify_copy_locked(source: Path, destination: Path, record: Path | None = None) -> dict[str, object]:
     if not source.is_dir() or not destination.is_dir():
         raise FileNotFoundError("source and destination must both be directories")
     if record is not None:
@@ -407,14 +413,14 @@ def _copy_tree_locked(source: Path, destination: Path, record: Path) -> dict[str
             raise FileExistsError(f"destination already exists: {destination}")
         # A crash after rename but before _json_write leaves a verified
         # destination without its audit record. Recover only after hashing it.
-        return verify_copy(source, destination, record)
+        return _verify_copy_locked(source, destination, record)
     temporary = destination.with_name(f".{destination.name}.partial-{os.getpid()}")
     if temporary.exists():
         raise FileExistsError(f"temporary destination already exists: {temporary}")
     temporary.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, temporary, copy_function=shutil.copy2, symlinks=True)
     try:
-        result = verify_copy(source, temporary)
+        result = _verify_copy_locked(source, temporary)
         os.replace(temporary, destination)
         result["destination"] = str(destination.resolve())
         _json_write(record, result)

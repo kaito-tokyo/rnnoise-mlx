@@ -115,11 +115,20 @@ def _validate_downloaded_checkpoint_run(checkpoint: Path, run_id: str | None) ->
     if not marker.exists():
         return
     try:
-        marker_run_id = json.loads(marker.read_text())["run_id"]
-    except (KeyError, TypeError, json.JSONDecodeError):
+        metadata = json.loads(marker.read_text())
+        marker_run_id = metadata["run_id"]
+        update = int(metadata["update"])
+        manifest_sha256 = str(metadata["manifest_sha256"])
+        if metadata.get("format_version") != 1:
+            raise ValueError
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         raise ValueError(f"invalid downloaded checkpoint marker: {marker}") from None
     if marker_run_id != run_id:
         raise ValueError("downloaded checkpoint run_id does not match --mlflow-run-id")
+    from rnnoise_mlx.tools.mlflow_checkpoint import verify_checkpoint
+
+    if verify_checkpoint(checkpoint, update) != manifest_sha256:
+        raise ValueError("downloaded checkpoint differs from completion marker")
 
 
 def main():
@@ -309,6 +318,24 @@ def main():
         )
         tracker.log_evaluation("initial", initial_evaluation, 0)
     if stop_requested:
+        checkpoint = save_checkpoint(
+            output / "checkpoints",
+            model,
+            optimizer,
+            config,
+            update=update,
+            next_epoch=1,
+            next_batch=0,
+            processed_frames=processed_frames,
+            elapsed_seconds=elapsed_before_resume,
+            history=history,
+            training_config=vars(args),
+            initial_evaluation=initial_evaluation,
+            feature_identity=verified_feature_identity,
+            evaluation_feature_identity=verified_evaluation_feature_identity,
+        )
+        if args.mlflow_log_checkpoints:
+            tracker.log_checkpoint(checkpoint, update)
         summary = {
             "updates": update,
             "stop_requested": True,
