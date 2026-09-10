@@ -76,6 +76,17 @@ def test_initialize_is_idempotent(tmp_path, monkeypatch):
     assert (tmp_path / "experiments" / "active").is_dir()
 
 
+def test_machine_id_distinguishes_hosts_with_the_same_short_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(portable_storage.socket, "gethostname", lambda: "shared.local")
+    monkeypatch.setattr(portable_storage, "_machine_identifiers", lambda: ["first"])
+
+    first = portable_storage.machine_id()
+    monkeypatch.setattr(portable_storage, "_machine_identifiers", lambda: ["second"])
+
+    assert first != portable_storage.machine_id()
+    assert first.startswith("shared-")
+
+
 def test_verify_copy_detects_matching_and_different_trees(tmp_path):
     source = tmp_path / "source"
     destination = tmp_path / "destination"
@@ -329,6 +340,7 @@ def test_eject_check_acquires_the_root_training_guard(tmp_path, monkeypatch):
         portable_storage.eject_check(tmp_path)
 
     assert str(tmp_path / ".rnnoise-training.lock.guard") in calls
+    assert str(tmp_path / "runtime" / ".rnnoise-operation.lock") in calls
 
 
 def test_stop_mlflow_acquires_startup_lock(tmp_path, monkeypatch):

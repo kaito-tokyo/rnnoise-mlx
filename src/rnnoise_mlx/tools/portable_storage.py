@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import time
 from urllib.request import urlopen
+import uuid
 
 
 DEFAULT_ROOT = Path("/Volumes/rnnoise-mlx-train")
@@ -94,10 +96,44 @@ def load_volume_config(root: Path) -> dict[str, object]:
     return config
 
 
+def _machine_identifiers() -> list[str]:
+    identifiers = []
+    for path in (Path("/etc/machine-id"), Path("/var/db/uuidtext")):
+        try:
+            identifiers.append(path.read_text().strip())
+        except OSError:
+            pass
+    if not identifiers:
+        identifiers.append(f"{os.getuid()}:{uuid.getnode():012x}")
+    return identifiers
+
+
 def machine_id() -> str:
     value = socket.gethostname().split(".", 1)[0].lower()
     normalized = re.sub(r"[^a-z0-9-]+", "-", value).strip("-")
-    return normalized or "unknown-mac"
+    identifiers = _machine_identifiers()
+    suffix = hashlib.sha256("\0".join(identifiers).encode()).hexdigest()[:12]
+    return f"{normalized or 'unknown-machine'}-{suffix}"
+
+
+def registered_volume_for_paths(paths: list[Path]) -> Path | None:
+    """Validate and return the portable root when any path uses it."""
+    root = Path(os.environ.get("RNNOISE_MLX_STORAGE_ROOT", DEFAULT_ROOT)).expanduser()
+    resolved_root = root.resolve()
+    if any(_is_within(path.expanduser().resolve(), resolved_root) for path in paths):
+        load_volume_config(root)
+        return resolved_root
+    return None
+
+
+@contextmanager
+def volume_operation_guard(root: Path):
+    """Exclude portable-volume writers while eject safety is being checked."""
+    path = root / "runtime" / ".rnnoise-operation.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        yield
 
 
 def initialize(root: Path, expected_uuid: str = DEFAULT_UUID) -> dict[str, object]:
@@ -450,7 +486,8 @@ def eject_check(root: Path) -> dict[str, object]:
         training_guard = root / ".rnnoise-training.lock.guard"
         with training_guard.open("a+") as training_stream:
             fcntl.flock(training_stream, fcntl.LOCK_EX)
-            return _eject_check_locked(root, root_training_guard_held=True)
+            with volume_operation_guard(root):
+                return _eject_check_locked(root, root_training_guard_held=True)
 
 
 def _eject_check_locked(root: Path, *, root_training_guard_held: bool = False) -> dict[str, object]:

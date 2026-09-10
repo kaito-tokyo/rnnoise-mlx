@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -236,26 +237,30 @@ def main() -> None:
     if shutil.which("ffmpeg") is None:
         parser.error("ffmpeg is required")
     output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=False)
-    try:
-        manifest = {
-            "format_version": 1,
-            "sample_rate_hz": RATE,
-            "sample_format": "s16le",
-            "specification": str(args.specification.resolve()),
-            "splits": {
-                split: render_split(specification, split, output / f"{split}_speech.pcm")
-                for split in ("train", "eval")
-            },
-            "augmentation": link_augmentation(args.augmentation_prepared, output),
-        }
-        (output / "speech-mix-manifest.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-        )
-    except Exception:
-        # Never leave an apparently complete prepared directory behind.
-        shutil.rmtree(output)
-        raise
+    from .portable_storage import registered_volume_for_paths, volume_operation_guard
+
+    portable_root = registered_volume_for_paths([output])
+    with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        output.mkdir(parents=True, exist_ok=False)
+        try:
+            manifest = {
+                "format_version": 1,
+                "sample_rate_hz": RATE,
+                "sample_format": "s16le",
+                "specification": str(args.specification.resolve()),
+                "splits": {
+                    split: render_split(specification, split, output / f"{split}_speech.pcm")
+                    for split in ("train", "eval")
+                },
+                "augmentation": link_augmentation(args.augmentation_prepared, output),
+            }
+            (output / "speech-mix-manifest.json").write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+            )
+        except Exception:
+            # Never leave an apparently complete prepared directory behind.
+            shutil.rmtree(output)
+            raise
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
 

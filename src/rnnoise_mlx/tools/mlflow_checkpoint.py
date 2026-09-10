@@ -80,6 +80,9 @@ def _client(uri: str):
 def download_checkpoint(client, run_id: str, destination: Path, update: int | None = None) -> Path:
     """Select a committed generation, validate, then atomically publish locally."""
     destination = destination.absolute()
+    from .portable_storage import registered_volume_for_paths
+
+    registered_volume_for_paths([destination])
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"checkpoint destination exists: {destination}")
     candidates = []

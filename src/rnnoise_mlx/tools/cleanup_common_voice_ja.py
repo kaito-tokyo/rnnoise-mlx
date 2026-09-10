@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 import ctypes
 import ctypes.util
 import hashlib
@@ -390,47 +391,54 @@ def main() -> None:
         noise_suppress_db=args.noise_suppress_db, threshold=args.threshold,
         margin_samples=margin_samples,
     )
-    reusable_inputs: set[str] = set()
-    if output_root.exists() and args.resume:
-        try:
-            reusable_inputs = validate_resume(output_root, contract, source_root, records)
-        except (OSError, ValueError, json.JSONDecodeError) as error:
-            parser.error(str(error))
-    output_root.mkdir(parents=True, exist_ok=args.resume)
-    progress_path = output_root / "cleanup-progress.json"
-    operation_marker = output_root / ".cleanup.partial"
-    progress = {**contract, "files": []}
-    if progress_path.is_file():
-        progress = json.loads(progress_path.read_text())
-    else:
-        json_write(progress_path, progress)
-    json_write(operation_marker, {"operation": "cleanup", "progress": progress_path.name})
-    factory = lambda: speex.create(frame_size, args.sample_rate, args.noise_suppress_db)
-    def worker(record: dict[str, Any]) -> dict[str, Any]:
-        return cleanup_one(
-            source_root, output_root, record, factory, args.threshold, margin_samples,
-            args.sample_rate, frame_size,
-            reuse_existing=Path(str(record["path"])).as_posix() in reusable_inputs,
-        )
+    from .portable_storage import registered_volume_for_paths, volume_operation_guard
 
-    results_by_input: dict[str, dict[str, Any]] = {
-        item["input"]: item for item in progress.get("files", [])
-    }
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = [pool.submit(worker, record) for record in records]
-        for future in as_completed(futures):
-            result = future.result()
-            results_by_input[result["input"]] = result
-            progress = {**contract, "files": list(results_by_input.values())}
+    portable_root = registered_volume_for_paths(
+        [source_root, output_root, filter_manifest, library_path]
+    )
+    with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        reusable_inputs: set[str] = set()
+        if output_root.exists() and args.resume:
+            try:
+                reusable_inputs = validate_resume(output_root, contract, source_root, records)
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                parser.error(str(error))
+        output_root.mkdir(parents=True, exist_ok=args.resume)
+        progress_path = output_root / "cleanup-progress.json"
+        operation_marker = output_root / ".cleanup.partial"
+        progress = {**contract, "files": []}
+        if progress_path.is_file():
+            progress = json.loads(progress_path.read_text())
+        else:
             json_write(progress_path, progress)
+        json_write(operation_marker, {"operation": "cleanup", "progress": progress_path.name})
+        factory = lambda: speex.create(frame_size, args.sample_rate, args.noise_suppress_db)
 
-    results = [results_by_input[Path(str(record["path"])).as_posix()] for record in records]
-    manifest = {**contract, "files": results}
-    manifest_path = output_root / "cleanup-manifest.json"
-    json_write(manifest_path, manifest)
-    progress_path.unlink(missing_ok=True)
-    operation_marker.unlink(missing_ok=True)
-    print(json.dumps({"cleaned_files": len(results), "output": str(output_root)}))
+        def worker(record: dict[str, Any]) -> dict[str, Any]:
+            return cleanup_one(
+                source_root, output_root, record, factory, args.threshold, margin_samples,
+                args.sample_rate, frame_size,
+                reuse_existing=Path(str(record["path"])).as_posix() in reusable_inputs,
+            )
+
+        results_by_input: dict[str, dict[str, Any]] = {
+            item["input"]: item for item in progress.get("files", [])
+        }
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futures = [pool.submit(worker, record) for record in records]
+            for future in as_completed(futures):
+                result = future.result()
+                results_by_input[result["input"]] = result
+                progress = {**contract, "files": list(results_by_input.values())}
+                json_write(progress_path, progress)
+
+        results = [results_by_input[Path(str(record["path"])).as_posix()] for record in records]
+        manifest = {**contract, "files": results}
+        manifest_path = output_root / "cleanup-manifest.json"
+        json_write(manifest_path, manifest)
+        progress_path.unlink(missing_ok=True)
+        operation_marker.unlink(missing_ok=True)
+        print(json.dumps({"cleaned_files": len(results), "output": str(output_root)}))
 
 
 if __name__ == "__main__":

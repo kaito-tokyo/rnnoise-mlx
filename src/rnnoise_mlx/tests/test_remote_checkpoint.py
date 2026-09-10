@@ -112,6 +112,22 @@ def test_dangling_destination_symlink_is_not_overwritten(tmp_path):
     assert destination.is_symlink()
 
 
+def test_download_preflights_destination_on_registered_volume(tmp_path, monkeypatch):
+    root = tmp_path / "volume"
+    destination = root / "checkpoints" / "update"
+    monkeypatch.setattr("rnnoise_mlx.tools.portable_storage.DEFAULT_ROOT", root)
+    calls = []
+    monkeypatch.setattr(
+        "rnnoise_mlx.tools.portable_storage.load_volume_config",
+        lambda path: calls.append(path) or {},
+    )
+
+    with pytest.raises(FileNotFoundError):
+        remote.download_checkpoint(Client(tmp_path / "server"), "run", destination)
+
+    assert calls == [root]
+
+
 @pytest.mark.parametrize("uri", ["file:///tmp/mlruns", "sqlite:///db", "./mlruns"])
 def test_direct_tracking_store_rejected(uri):
     with pytest.raises(ValueError, match="HTTP"):
