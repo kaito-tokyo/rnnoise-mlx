@@ -75,7 +75,7 @@ def main() -> None:
     parser.add_argument("--eval-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, required=True)
     args = parser.parse_args()
-    if args.output.exists():
+    if args.output.exists() or args.output.is_symlink():
         parser.error(f"output already exists: {args.output}")
     print(json.dumps(split(args.source, args.output, args.eval_fraction, args.seed), indent=2))
 

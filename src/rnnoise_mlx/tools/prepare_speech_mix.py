@@ -247,32 +247,49 @@ def main() -> None:
             if weight > 0:
                 source = resolve_config_path(configured[split])
                 guarded_paths.append(source)
+    portable_root = registered_volume_for_paths(guarded_paths)
+    with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        for configured in specification["sources"]:
+            assert isinstance(configured, dict)
+            for split in ("train", "eval"):
+                weight = int(configured.get(f"{split}_weight", configured.get("weight", 0)))
+                if weight <= 0:
+                    continue
+                source = resolve_config_path(configured[split])
                 source_type = str(configured.get(f"{split}_type", configured.get("type", "audio-directory")))
                 if source_type == "audio-directory" and source.is_dir():
                     guarded_paths.extend(path.resolve() for path in stable_audio_paths(source, f"{split}:{configured['name']}"))
-    portable_root = registered_volume_for_paths(guarded_paths)
-    with volume_operation_guard(portable_root) if portable_root else nullcontext():
-        output.mkdir(parents=True, exist_ok=False)
-        try:
-            manifest = {
-                "format_version": 1,
-                "sample_rate_hz": RATE,
-                "sample_format": "s16le",
-                "specification": str(args.specification.resolve()),
-                "splits": {
-                    split: render_split(specification, split, output / f"{split}_speech.pcm")
-                    for split in ("train", "eval")
-                },
-                "augmentation": link_augmentation(args.augmentation_prepared, output),
-            }
-            (output / "speech-mix-manifest.json").write_text(
-                json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-            )
-        except Exception:
-            # Never leave an apparently complete prepared directory behind.
-            shutil.rmtree(output)
-            raise
+        target_root = registered_volume_for_paths(guarded_paths)
+        if target_root is not None and target_root != portable_root:
+            with volume_operation_guard(target_root):
+                manifest = _prepare_locked(specification, args, output)
+        else:
+            manifest = _prepare_locked(specification, args, output)
     print(json.dumps(manifest, indent=2, sort_keys=True))
+
+
+def _prepare_locked(specification: dict[str, object], args: argparse.Namespace, output: Path) -> dict[str, object]:
+    output.mkdir(parents=True, exist_ok=False)
+    try:
+        manifest = {
+            "format_version": 1,
+            "sample_rate_hz": RATE,
+            "sample_format": "s16le",
+            "specification": str(args.specification.resolve()),
+            "splits": {
+                split: render_split(specification, split, output / f"{split}_speech.pcm")
+                for split in ("train", "eval")
+            },
+            "augmentation": link_augmentation(args.augmentation_prepared, output),
+        }
+        (output / "speech-mix-manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+        )
+    except Exception:
+        # Never leave an apparently complete prepared directory behind.
+        shutil.rmtree(output)
+        raise
+    return manifest
 
 
 if __name__ == "__main__":

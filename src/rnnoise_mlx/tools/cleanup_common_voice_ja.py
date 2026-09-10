@@ -390,8 +390,8 @@ def main() -> None:
     portable_root = registered_volume_for_paths(
         [source_root, output_root, filter_manifest, library_path]
     )
-    with cleanup_output_guard(output_root):
-        with volume_operation_guard(portable_root) if portable_root else nullcontext():
+    with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        with cleanup_output_guard(output_root):
             speex = SpeexDSP(library_path)
             missing = [str(record["path"]) for record in records
                        if not (source_root / str(record["path"])).is_file()]
