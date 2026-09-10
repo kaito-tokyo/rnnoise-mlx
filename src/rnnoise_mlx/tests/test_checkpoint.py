@@ -43,6 +43,24 @@ def test_training_lock_replaces_stale_process_identity(tmp_path, monkeypatch):
     }
 
 
+def test_training_lock_uses_default_volume_when_environment_is_unset(tmp_path, monkeypatch):
+    from rnnoise_mlx.tools import portable_storage
+    from rnnoise_mlx.training import train
+
+    root = tmp_path / "volume"
+    feature = root / "features" / "train.f32"
+    feature.parent.mkdir(parents=True)
+    monkeypatch.delenv("RNNOISE_MLX_STORAGE_ROOT", raising=False)
+    monkeypatch.setattr(portable_storage, "DEFAULT_ROOT", root)
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {})
+    monkeypatch.setattr(train.socket, "gethostname", lambda: "host")
+    monkeypatch.setattr(train, "_process_started_at", lambda pid: "current")
+
+    train._register_training_lock(tmp_path / "output", feature)
+
+    assert (root / ".rnnoise-training.lock").is_file()
+
+
 def test_downloaded_checkpoint_must_match_resumed_run(tmp_path):
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()

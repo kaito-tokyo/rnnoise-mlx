@@ -53,9 +53,10 @@ if (( create )); then
   trap cleanup_session EXIT
 fi
 
+proxy_command="colab ssh --proxy-mode --session $(printf '%q' "$session") --identity $(printf '%q' "$identity")"
 ssh_args=(
   -i "$identity"
-  -o "ProxyCommand=colab ssh --proxy-mode --session $session --identity $identity"
+  -o "ProxyCommand=$proxy_command"
   -o StrictHostKeyChecking=accept-new
   root@colab-runtime
 )

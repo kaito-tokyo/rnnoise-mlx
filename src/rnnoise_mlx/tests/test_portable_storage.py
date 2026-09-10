@@ -126,6 +126,24 @@ def test_copy_tree_rejects_destination_below_source(tmp_path):
         portable_storage.copy_tree(source, source / "copy", tmp_path / "copy.json")
 
 
+def test_copy_tree_cli_requires_destination_on_registered_volume(tmp_path, monkeypatch):
+    root = tmp_path / "volume"
+    source = tmp_path / "source"
+    source.mkdir()
+    destination = tmp_path / "outside"
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {})
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "storage", "--root", str(root), "copy-tree", str(source), str(destination),
+            "--record", str(tmp_path / "record.json"),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="registered storage volume"):
+        portable_storage.main()
+
+
 def test_sqlite_integrity_check(tmp_path):
     database = tmp_path / "mlflow.db"
     import sqlite3

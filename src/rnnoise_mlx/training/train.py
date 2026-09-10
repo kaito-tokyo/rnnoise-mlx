@@ -51,15 +51,12 @@ def _recover_initial_evaluation(output: Path, existing_run) -> dict | None:
 
 def _register_training_lock(*paths: Path | None) -> None:
     """Prevent eject-check from approving a volume with a live trainer."""
-    root_value = os.environ.get("RNNOISE_MLX_STORAGE_ROOT")
-    if not root_value:
-        return
-    root = Path(root_value).expanduser().resolve()
+    from rnnoise_mlx.tools.portable_storage import DEFAULT_ROOT, load_volume_config
+
+    root = Path(os.environ.get("RNNOISE_MLX_STORAGE_ROOT", DEFAULT_ROOT)).expanduser().resolve()
     resolved_paths = [path.resolve() for path in paths if path is not None]
     if not any(path == root or root in path.parents for path in resolved_paths):
         return
-    from rnnoise_mlx.tools.portable_storage import load_volume_config
-
     load_volume_config(root)
     lock = root / ".rnnoise-training.lock"
     guard = root / ".rnnoise-training.lock.guard"

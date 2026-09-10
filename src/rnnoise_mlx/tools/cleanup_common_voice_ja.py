@@ -228,6 +228,18 @@ def validate_records(records: list[dict[str, Any]], threshold: float) -> None:
             raise ValueError(f"accepted input has an invalid onset at {threshold_key} dBFS: {source}")
 
 
+def validate_input_digests(source_root: Path, records: list[dict[str, Any]]) -> None:
+    changed = [
+        str(record["path"])
+        for record in records
+        if record.get("input_sha256") != sha256(source_root / str(record["path"]))
+    ]
+    if changed:
+        raise ValueError(
+            f"accepted input checksums differ from filter manifest: {len(changed)} (first: {changed[0]})"
+        )
+
+
 def cleanup_contract(
     source_root: Path,
     filter_manifest: Path,
@@ -346,6 +358,10 @@ def main() -> None:
                if not (source_root / str(record["path"])).is_file()]
     if missing:
         parser.error(f"accepted input clips are missing: {len(missing)} (first: {missing[0]})")
+    try:
+        validate_input_digests(source_root, records)
+    except ValueError as error:
+        parser.error(str(error))
 
     frame_size = args.sample_rate * args.frame_ms // 1000
     margin_samples = round(args.margin_ms * args.sample_rate / 1000)

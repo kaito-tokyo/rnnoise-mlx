@@ -533,6 +533,11 @@ def main() -> None:
     elif args.command == "verify-copy":
         result = verify_copy(args.source, args.destination, args.record)
     elif args.command == "copy-tree":
+        root = args.root.resolve()
+        destination = args.destination.resolve()
+        load_volume_config(root)
+        if destination != root and root not in destination.parents:
+            raise ValueError("copy destination must be on the registered storage volume")
         result = copy_tree(args.source, args.destination, args.record)
     elif args.command == "finalize-verified-copy":
         result = finalize_verified_copy(
