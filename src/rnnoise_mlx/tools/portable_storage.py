@@ -286,7 +286,11 @@ def verify_copy(source: Path, destination: Path, record: Path | None = None) -> 
 
 def copy_tree(source: Path, destination: Path, record: Path) -> dict[str, object]:
     if destination.exists():
-        raise FileExistsError(f"destination already exists: {destination}")
+        if record.exists():
+            raise FileExistsError(f"destination already exists: {destination}")
+        # A crash after rename but before _json_write leaves a verified
+        # destination without its audit record. Recover only after hashing it.
+        return verify_copy(source, destination, record)
     temporary = destination.with_name(f".{destination.name}.partial-{os.getpid()}")
     if temporary.exists():
         raise FileExistsError(f"temporary destination already exists: {temporary}")

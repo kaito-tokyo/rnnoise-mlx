@@ -90,6 +90,21 @@ def test_verify_copy_detects_matching_and_different_trees(tmp_path):
         portable_storage.verify_copy(source, destination)
 
 
+def test_copy_tree_recovers_record_after_post_rename_interruption(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    destination.mkdir()
+    (source / "file").write_bytes(b"same")
+    (destination / "file").write_bytes(b"same")
+    record = tmp_path / "inventory" / "copy.json"
+
+    result = portable_storage.copy_tree(source, destination, record)
+
+    assert result["matched"]
+    assert record.is_file()
+
+
 def test_sqlite_integrity_check(tmp_path):
     database = tmp_path / "mlflow.db"
     import sqlite3
