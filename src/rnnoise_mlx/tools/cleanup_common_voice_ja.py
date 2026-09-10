@@ -378,11 +378,6 @@ def main() -> None:
                if not (source_root / str(record["path"])).is_file()]
     if missing:
         parser.error(f"accepted input clips are missing: {len(missing)} (first: {missing[0]})")
-    try:
-        validate_input_digests(source_root, records)
-    except ValueError as error:
-        parser.error(str(error))
-
     frame_size = args.sample_rate * args.frame_ms // 1000
     margin_samples = round(args.margin_ms * args.sample_rate / 1000)
     contract = cleanup_contract(
@@ -397,6 +392,10 @@ def main() -> None:
         [source_root, output_root, filter_manifest, library_path]
     )
     with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        try:
+            validate_input_digests(source_root, records)
+        except ValueError as error:
+            parser.error(str(error))
         reusable_inputs: set[str] = set()
         if output_root.exists() and args.resume:
             try:

@@ -214,6 +214,7 @@ def main():
         output,
         Path(args.features),
         Path(args.eval_features) if args.eval_features else None,
+        args.resume_from,
     )
     provenance_artifacts = list(args.provenance_artifact)
     for feature_path in (Path(args.features), args.eval_features):
@@ -557,14 +558,16 @@ def main():
                 commit_checkpoint(next_epoch, next_batch)
                 checkpoint_due = False
                 checkpoint_committed = True
-            if stop_requested and not checkpoint_committed:
-                next_epoch = epoch
-                next_batch = batch_index
-                if next_batch >= dataset.sequence_count // args.batch_size:
-                    next_epoch += 1
-                    next_batch = 0
-                commit_checkpoint(next_epoch, next_batch)
-            if stop_requested or (args.max_updates is not None and update >= args.max_updates):
+            if stop_requested:
+                if not checkpoint_committed:
+                    next_epoch = epoch
+                    next_batch = batch_index
+                    if next_batch >= dataset.sequence_count // args.batch_size:
+                        next_epoch += 1
+                        next_batch = 0
+                    commit_checkpoint(next_epoch, next_batch)
+                break
+            if args.max_updates is not None and update >= args.max_updates:
                 break
         if stop_requested or (args.max_updates is not None and update >= args.max_updates):
             break
@@ -585,14 +588,22 @@ def main():
         tracker.pause(summary, output)
         return
 
-    signal.signal(signal.SIGINT, signal.default_int_handler)
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-
     model.save(str(output / "model.safetensors"))
     trained_evaluation = evaluate(model, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
     reloaded = RNNoise.load(str(output / "model.safetensors"), config)
     reloaded_evaluation = evaluate(reloaded, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
     reload_matches = trained_evaluation == reloaded_evaluation
+    if stop_requested:
+        summary = {
+            "updates": update,
+            "stop_requested": True,
+            "training_seconds": training_elapsed,
+            "processed_frames": processed_frames,
+            "history": history,
+        }
+        (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
+        tracker.pause(summary, output)
+        return
     summary = {
         "updates": update,
         "stop_requested": stop_requested,
