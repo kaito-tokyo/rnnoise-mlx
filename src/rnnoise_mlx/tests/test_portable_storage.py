@@ -82,6 +82,35 @@ def test_sqlite_integrity_check(tmp_path):
     assert portable_storage.sqlite_integrity(database) == "ok"
 
 
+def test_running_pid_rejects_stale_or_unrelated_process(tmp_path, monkeypatch):
+    root = tmp_path
+    (root / "mlflow").mkdir()
+    portable_storage._json_write(
+        root / "mlflow" / "mlflow.pid", {"pid": 42, "database": "unused"}
+    )
+    result = type("Result", (), {"returncode": 0, "stdout": "python unrelated.py\n"})()
+    monkeypatch.setattr(portable_storage.subprocess, "run", lambda *args, **kwargs: result)
+
+    assert portable_storage._running_pid(root) is None
+    assert not (root / "mlflow" / "mlflow.pid").exists()
+
+
+def test_running_pid_accepts_matching_mlflow_server(tmp_path, monkeypatch):
+    root = tmp_path
+    database = root / "mlflow" / "mlflow.db"
+    database.parent.mkdir()
+    portable_storage._json_write(
+        root / "mlflow" / "mlflow.pid", {"pid": 42, "database": str(database.resolve())}
+    )
+    result = type("Result", (), {
+        "returncode": 0,
+        "stdout": f"python -m mlflow server --backend-store-uri sqlite:///{database.resolve()}\n",
+    })()
+    monkeypatch.setattr(portable_storage.subprocess, "run", lambda *args, **kwargs: result)
+
+    assert portable_storage._running_pid(root) == 42
+
+
 def test_finalize_verified_copy_renames_and_registers(tmp_path, monkeypatch):
     root = tmp_path
     temporary = root / "datasets" / ".source.partial"

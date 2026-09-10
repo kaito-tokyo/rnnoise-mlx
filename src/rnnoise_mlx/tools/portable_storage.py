@@ -132,10 +132,27 @@ def _running_pid(root: Path) -> int | None:
     path = _pid_path(root)
     if not path.is_file():
         return None
-    pid = int(path.read_text().strip())
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+        metadata = json.loads(path.read_text())
+        pid = int(metadata["pid"])
+        expected_database = str((root / "mlflow" / "mlflow.db").resolve())
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        path.unlink(missing_ok=True)
+        return None
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "command="],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError:
+        result = None
+    command = result.stdout.strip() if result is not None and result.returncode == 0 else ""
+    if (
+        "-m mlflow server" not in command
+        or f"sqlite:///{expected_database}" not in command
+    ):
         path.unlink(missing_ok=True)
         return None
     return pid
@@ -168,7 +185,7 @@ def start_mlflow(root: Path, port: int = 5000, timeout: float = 30.0) -> int:
         "--serve-artifacts",
     ]
     process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    _pid_path(root).write_text(f"{process.pid}\n")
+    _json_write(_pid_path(root), {"pid": process.pid, "database": str(database.resolve())})
     deadline = time.monotonic() + timeout
     health = f"http://127.0.0.1:{port}/health"
     try:
