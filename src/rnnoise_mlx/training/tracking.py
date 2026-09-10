@@ -200,11 +200,12 @@ class MLflowTracker:
         )
 
     def log_checkpoint(self, checkpoint: Path, update: int) -> None:
-        """Upload every complete checkpoint under an immutable update path."""
-        mlflow.log_artifacts(
-            str(checkpoint), artifact_path=f"checkpoints/{checkpoint.name}"
-        )
+        """Publish only round-trip verified, committed checkpoints."""
+        from ..tools.mlflow_checkpoint import upload_checkpoint
+
+        artifact = upload_checkpoint(MlflowClient(), self.run_id, checkpoint, update)
         mlflow.log_metric("checkpoint_uploaded_update", float(update), step=update)
+        mlflow.set_tag("checkpoint_latest_artifact", artifact)
 
     def log_provenance_artifacts(
         self, artifacts: list[Path], namespace: str = "chapter-00000000"

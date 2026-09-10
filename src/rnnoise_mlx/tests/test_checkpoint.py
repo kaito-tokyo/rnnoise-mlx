@@ -1,16 +1,76 @@
 import hashlib
 import json
+from types import SimpleNamespace
 from pathlib import Path
 
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
+import pytest
+import numpy as np
 from mlx.utils import tree_flatten
 
 from rnnoise_mlx.training.checkpoint import load_checkpoint, save_checkpoint
 from rnnoise_mlx.training.train import _feature_manifest, _recover_initial_evaluation
 from rnnoise_mlx.training.model import ModelConfig, RNNoise
 from rnnoise_mlx.training.tracking import MLflowTracker
+
+
+@pytest.mark.parametrize("uri", ["file:///tmp/mlruns", "sqlite:///mlflow.db", "http://unavailable.invalid"])
+def test_tracking_failure_does_not_create_training_output(tmp_path, monkeypatch, uri):
+    from rnnoise_mlx.training import train, tracking
+
+    class UnavailableClient:
+        def search_experiments(self, **kwargs):
+            raise OSError("server unavailable")
+
+    monkeypatch.setattr(tracking, "MlflowClient", UnavailableClient)
+    monkeypatch.setattr(tracking.mlflow, "set_tracking_uri", lambda uri: None)
+    output = tmp_path / "not-created"
+    monkeypatch.setattr("sys.argv", [
+        "train", str(tmp_path / "unused.f32"), str(output),
+        "--mlflow-tracking-uri", uri, "--mlflow-experiment", "test",
+        "--mlflow-run-name", "test",
+    ])
+    with pytest.raises((ValueError, ConnectionError)):
+        train.main()
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("remote_enabled", [True, False])
+def test_epoch_end_saves_checkpoint_and_respects_upload_option(tmp_path, monkeypatch, remote_enabled):
+    from rnnoise_mlx.training import train
+
+    feature = tmp_path / "train.f32"
+    data = np.full((2, 16, 98), 0.5, dtype="<f4")
+    data.tofile(feature)
+    output = tmp_path / "output"
+    uploads = []
+    tracker = SimpleNamespace(
+        run_id="test", log_evaluation=lambda *args: None,
+        log_checkpoint=lambda path, update: uploads.append((path, update)),
+        complete=lambda *args: None,
+    )
+    monkeypatch.setattr(train, "MLflowTracker", lambda *args: tracker)
+    monkeypatch.setattr(train, "validate_tracking_target", lambda *args: None)
+    monkeypatch.setattr(train.signal, "signal", lambda *args: None)
+    argv = [
+        "train", str(feature), str(output), "--batch-size", "2",
+        "--sequence-length", "16", "--training-chunk-length", "16",
+        "--epochs", "1", "--checkpoint-every", "100",
+        "--no-compile", "--no-prefetch", "--sync-eval",
+        "--mlflow-tracking-uri", "http://unused", "--mlflow-experiment", "test",
+        "--mlflow-run-name", "test",
+    ]
+    if not remote_enabled:
+        argv.append("--no-mlflow-log-checkpoints")
+    monkeypatch.setattr("sys.argv", argv)
+    train.main()
+    saved = output / "checkpoints/update-00000001"
+    assert (saved / "manifest.json").is_file()
+    assert uploads == ([(saved, 1)] if remote_enabled else [])
+    state = json.loads((saved / "trainer-state.json").read_text())
+    assert (state["next_epoch"], state["next_batch"]) == (2, 0)
 
 
 def _updated_model_and_optimizer():
@@ -117,7 +177,24 @@ def test_complete_checkpoint_round_trip(tmp_path):
         ).item()
 
 
-def test_resumed_next_update_matches_uninterrupted_training(tmp_path):
+@pytest.mark.parametrize("read_only_random_state", [False, True])
+def test_resumed_next_update_matches_uninterrupted_training(
+    tmp_path, monkeypatch, read_only_random_state
+):
+    if read_only_random_state:
+        original_state = mx.random.state
+
+        class ReadOnlyRandomState:
+            def __len__(self):
+                return len(original_state)
+
+            def __getitem__(self, index):
+                return original_state[index]
+
+            def __iter__(self):
+                return iter(original_state)
+
+        monkeypatch.setattr(mx.random, "state", ReadOnlyRandomState())
     config, uninterrupted_model, uninterrupted_optimizer = (
         _updated_model_and_optimizer()
     )
@@ -487,22 +564,26 @@ def test_checkpoint_rejects_corrupt_tensor(tmp_path):
 def test_mlflow_uploads_checkpoint_under_immutable_update_path(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "rnnoise_mlx.training.tracking.mlflow.log_artifacts",
-        lambda local, artifact_path: calls.append((local, artifact_path)),
+        "rnnoise_mlx.tools.mlflow_checkpoint.upload_checkpoint",
+        lambda client, run_id, local, update: calls.append((run_id, local, update)) or "committed/path",
     )
+    monkeypatch.setattr("rnnoise_mlx.training.tracking.MlflowClient", lambda: object())
+    monkeypatch.setattr("rnnoise_mlx.training.tracking.mlflow.set_tag", lambda *args: calls.append(args))
     monkeypatch.setattr(
         "rnnoise_mlx.training.tracking.mlflow.log_metric",
         lambda *args, **kwargs: calls.append((args, kwargs)),
     )
     tracker = object.__new__(MLflowTracker)
+    tracker.run = SimpleNamespace(info=SimpleNamespace(run_id="run-test"))
     checkpoint = tmp_path / "update-00000500"
     checkpoint.mkdir()
     tracker.log_checkpoint(checkpoint, 500)
-    assert calls[0] == (str(checkpoint), "checkpoints/update-00000500")
+    assert calls[0] == ("run-test", checkpoint, 500)
     assert calls[1] == (
         ("checkpoint_uploaded_update", 500.0),
         {"step": 500},
     )
+    assert calls[2] == ("checkpoint_latest_artifact", "committed/path")
 
 
 def test_mlflow_uploads_small_provenance_artifacts(tmp_path, monkeypatch):

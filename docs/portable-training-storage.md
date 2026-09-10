@@ -50,8 +50,10 @@ export MLFLOW_EXPERIMENT=rnnoise-mlx
 
 The backend is `mlflow/mlflow.db`, artifacts are under `mlflow/artifacts`, and
 the server binds only to loopback. Direct `file:` and `sqlite:` tracking URIs
-remain forbidden. Checkpoints remain solely in the active experiment output;
-pass `--mlflow-log-checkpoints` only when deliberate duplication is required.
+remain forbidden. Training now uploads verified checkpoints by default for the
+Colab-to-home-MLflow workflow. For SSD-only operation where the active experiment
+output is already the durable authority, pass `--no-mlflow-log-checkpoints` to
+avoid duplication. See README for the committed-upload recovery command.
 
 Stop the server and verify SQLite before moving the volume:
 

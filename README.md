@@ -96,12 +96,36 @@ MLflow CLI options.
 Training writes a complete checkpoint at every `--checkpoint-every` updates
 (32 by default) under `OUTPUT/checkpoints/update-NNNNNNNN/`. Each checkpoint
 contains model weights, AdamW state, MLX random state, the data cursor, elapsed
-counters, and training history. Resume with:
+counters, and training history.
+
+Checkpoint upload is enabled by default. Use `--no-mlflow-log-checkpoints` only
+when the local output is already durable and remote recovery is not required.
+Each upload gets a unique attempt directory under `checkpoints/update-NNNNNNNN/`.
+The uploader downloads the payload and verifies all SHA-256 hashes before writing
+`complete.json` last. Failed attempts are retained but never selected for recovery.
+Only one trainer should write to a logical MLflow run at a time.
+Uploads and round-trip verification are synchronous. Choose `--checkpoint-every`
+for the acceptable recovery window and network cost; the default 32 updates can
+be too frequent for remote Colab training. No remote generations are auto-deleted.
+
+Download the latest committed checkpoint (or select `--update 500`):
+
+```sh
+python -m rnnoise_mlx.tools.mlflow_checkpoint \
+  --tracking-uri "$MLFLOW_TRACKING_URI" --run-id EXISTING_RUN_ID \
+  --destination ./restored-checkpoint
+```
+
+The destination must not exist. Downloads are verified in a temporary directory
+on the destination filesystem and renamed into place only after verification.
+Corrupt committed checkpoints fail closed; incomplete uploads are ignored. Legacy
+uploads without `complete.json` are not selected automatically.
+Then resume with:
 
 ```sh
 python -m rnnoise_mlx.training.train ... \
   --mlflow-run-id EXISTING_RUN_ID \
-  --resume-from OUTPUT/checkpoints/update-00000500
+  --resume-from ./restored-checkpoint
 ```
 
 Pass the original MLflow run ID when continuing the same logical training run.
@@ -114,6 +138,10 @@ Checkpoints are committed only at batch boundaries, so prefetched input cannot
 move the saved data cursor past the next batch. The legacy `--stateful-tbptt`
 mode finishes its current batch before checkpointing, so `--max-updates` can be
 rounded up to that safe boundary.
+Normal epoch completion also saves the last batch. SIGINT/SIGTERM request a stop
+at the next completed batch, including verified checkpoint upload before exit.
+Wait for process exit before destroying a Colab runtime. Forced termination or
+runtime loss can only recover the most recent previously committed upload.
 
 ## Generated artifacts
 

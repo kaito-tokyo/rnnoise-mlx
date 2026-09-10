@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
 import json
+import signal
 from pathlib import Path
 import time
 
@@ -91,8 +92,9 @@ def main():
     parser.add_argument("--checkpoint-every", type=int, default=32)
     parser.add_argument(
         "--mlflow-log-checkpoints",
-        action="store_true",
-        help="also copy complete checkpoints to MLflow artifacts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="save verified checkpoints to MLflow (default: enabled)",
     )
     parser.add_argument(
         "--provenance-artifact",
@@ -126,10 +128,10 @@ def main():
         parser.error("--resume-from requires --mlflow-run-id")
 
     output = Path(args.output)
-    output.mkdir(parents=True, exist_ok=True)
     existing_run = validate_tracking_target(
         args.mlflow_tracking_uri, args.mlflow_experiment, args.mlflow_run_id
     )
+    output.mkdir(parents=True, exist_ok=True)
     provenance_artifacts = list(args.provenance_artifact)
     for feature_path in (Path(args.features), args.eval_features):
         if feature_path is None:
@@ -361,6 +363,14 @@ def main():
                 )
         pending_losses.clear()
 
+    stop_requested = False
+
+    def request_stop(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
     checkpoint_due = False
     for epoch in range(resume_epoch, args.epochs + 1):
         first_batch = resume_batch if epoch == resume_epoch else 0
@@ -421,7 +431,11 @@ def main():
                 ):
                     break
             batch_index += 1
-            if checkpoint_due or (
+            final_batch = (
+                epoch == args.epochs
+                and batch_index >= dataset.sequence_count // args.batch_size
+            )
+            if checkpoint_due or stop_requested or final_batch or (
                 args.max_updates is not None and update >= args.max_updates
             ):
                 collect_pending()
@@ -450,9 +464,9 @@ def main():
                 if args.mlflow_log_checkpoints:
                     tracker.log_checkpoint(checkpoint, update)
                 checkpoint_due = False
-            if args.max_updates is not None and update >= args.max_updates:
+            if stop_requested or (args.max_updates is not None and update >= args.max_updates):
                 break
-        if args.max_updates is not None and update >= args.max_updates:
+        if stop_requested or (args.max_updates is not None and update >= args.max_updates):
             break
 
     collect_pending()
@@ -466,6 +480,7 @@ def main():
     reload_matches = trained_evaluation == reloaded_evaluation
     summary = {
         "updates": update,
+        "stop_requested": stop_requested,
         "training_seconds": training_elapsed,
         "updates_per_second": update / training_elapsed,
         "processed_frames": processed_frames,
