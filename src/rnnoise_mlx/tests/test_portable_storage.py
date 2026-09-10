@@ -40,6 +40,19 @@ def test_preflight_rejects_alternate_mount():
         portable_storage.preflight(Path("/Volumes/rnnoise-mlx-train 1"))
 
 
+def test_registered_operations_reject_self_declared_uuid(tmp_path, monkeypatch):
+    (tmp_path / "inventory").mkdir()
+    portable_storage._json_write(
+        tmp_path / "inventory" / "volume.json", {"format_version": 1, "volume_uuid": "other"}
+    )
+    monkeypatch.setattr(portable_storage, "DEFAULT_ROOT", tmp_path)
+
+    with pytest.raises(ValueError, match="unregistered"):
+        portable_storage.load_volume_config(tmp_path)
+    with pytest.raises(ValueError, match="cannot be overridden"):
+        portable_storage.initialize(tmp_path, "other")
+
+
 def test_initialize_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.setattr(portable_storage, "DEFAULT_ROOT", tmp_path)
     monkeypatch.setattr(

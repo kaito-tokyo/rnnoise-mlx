@@ -85,7 +85,9 @@ def load_volume_config(root: Path) -> dict[str, object]:
     if not path.is_file():
         raise FileNotFoundError(f"portable storage is not initialized: {path}")
     config = json.loads(path.read_text())
-    preflight(root, str(config["volume_uuid"]))
+    if str(config.get("volume_uuid", "")).upper() != DEFAULT_UUID:
+        raise ValueError("portable storage configuration has an unregistered volume UUID")
+    preflight(root)
     if config.get("format_version") != FORMAT_VERSION:
         raise ValueError("unsupported portable storage format")
     return config
@@ -98,6 +100,8 @@ def machine_id() -> str:
 
 
 def initialize(root: Path, expected_uuid: str = DEFAULT_UUID) -> dict[str, object]:
+    if expected_uuid.upper() != DEFAULT_UUID:
+        raise ValueError("portable storage UUID is fixed and cannot be overridden")
     info = preflight(root, expected_uuid)
     for relative in DIRECTORIES:
         (root / relative).mkdir(parents=True, exist_ok=True)
