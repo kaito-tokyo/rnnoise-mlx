@@ -27,3 +27,21 @@ def test_split_creates_symlinks_and_manifest(tmp_path: Path):
     assert all(not path.readlink().is_absolute() for path in output.rglob("*.flac"))
     assert all(path.resolve().is_file() for path in output.rglob("*.flac"))
     assert (output / "split-manifest.json").is_file()
+
+
+def test_split_resolves_symlinked_output_parent(tmp_path: Path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "clip.flac").write_bytes(b"audio")
+    physical_parent = tmp_path / "physical"
+    physical_parent.mkdir()
+    linked_parent = tmp_path / "data"
+    linked_parent.symlink_to(physical_parent, target_is_directory=True)
+    output = linked_parent / "split"
+    output.mkdir()
+
+    split(source, output, 0.5, 141)
+
+    links = list(output.rglob("*.flac"))
+    assert len(links) == 1
+    assert links[0].resolve() == source / "clip.flac"

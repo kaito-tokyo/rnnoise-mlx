@@ -10,6 +10,8 @@ from functools import partial
 import json
 import os
 import signal
+import socket
+import subprocess
 from pathlib import Path
 import time
 
@@ -59,17 +61,44 @@ def _register_training_lock(output: Path) -> None:
     if lock.exists():
         try:
             previous = json.loads(lock.read_text())
-            os.kill(int(previous["pid"]), 0)
+            pid = int(previous["pid"])
+            if (
+                previous["hostname"] != socket.gethostname()
+                or previous["started_at"] != _process_started_at(pid)
+            ):
+                raise OSError
         except (OSError, ValueError, KeyError, json.JSONDecodeError):
             lock.unlink(missing_ok=True)
         else:
             raise RuntimeError(f"training output is already active: {output}")
     try:
         with lock.open("x") as stream:
-            stream.write(json.dumps({"pid": os.getpid()}) + "\n")
+            stream.write(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "hostname": socket.gethostname(),
+                        "started_at": _process_started_at(os.getpid()),
+                    }
+                )
+                + "\n"
+            )
     except FileExistsError:
         raise RuntimeError(f"training output is already active: {output}") from None
     atexit.register(lock.unlink, missing_ok=True)
+
+
+def _process_started_at(pid: int) -> str:
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "lstart="],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    started_at = result.stdout.strip() if result.returncode == 0 else ""
+    if not started_at:
+        raise OSError(f"process is not running: {pid}")
+    return started_at
 
 
 def main():
@@ -402,6 +431,29 @@ def main():
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
     checkpoint_due = False
+
+    def commit_checkpoint(next_epoch: int, next_batch: int) -> None:
+        collect_pending()
+        mx.eval(model.state, optimizer.state)
+        checkpoint = save_checkpoint(
+            output / "checkpoints",
+            model,
+            optimizer,
+            config,
+            update=update,
+            next_epoch=next_epoch,
+            next_batch=next_batch,
+            processed_frames=processed_frames,
+            elapsed_seconds=elapsed_before_resume + time.monotonic() - started,
+            history=history,
+            training_config=vars(args),
+            initial_evaluation=initial_evaluation,
+            feature_identity=verified_feature_identity,
+            evaluation_feature_identity=verified_evaluation_feature_identity,
+        )
+        if args.mlflow_log_checkpoints:
+            tracker.log_checkpoint(checkpoint, update)
+
     for epoch in range(resume_epoch, args.epochs + 1):
         first_batch = resume_batch if epoch == resume_epoch else 0
         batch_index = first_batch
@@ -465,35 +517,25 @@ def main():
                 epoch == args.epochs
                 and batch_index >= dataset.sequence_count // args.batch_size
             )
+            checkpoint_committed = False
             if checkpoint_due or stop_requested or final_batch or (
                 args.max_updates is not None and update >= args.max_updates
             ):
-                collect_pending()
-                mx.eval(model.state, optimizer.state)
                 next_epoch = epoch
                 next_batch = batch_index
                 if next_batch >= dataset.sequence_count // args.batch_size:
                     next_epoch += 1
                     next_batch = 0
-                checkpoint = save_checkpoint(
-                    output / "checkpoints",
-                    model,
-                    optimizer,
-                    config,
-                    update=update,
-                    next_epoch=next_epoch,
-                    next_batch=next_batch,
-                    processed_frames=processed_frames,
-                    elapsed_seconds=elapsed_before_resume + time.monotonic() - started,
-                    history=history,
-                    training_config=vars(args),
-                    initial_evaluation=initial_evaluation,
-                    feature_identity=verified_feature_identity,
-                    evaluation_feature_identity=verified_evaluation_feature_identity,
-                )
-                if args.mlflow_log_checkpoints:
-                    tracker.log_checkpoint(checkpoint, update)
+                commit_checkpoint(next_epoch, next_batch)
                 checkpoint_due = False
+                checkpoint_committed = True
+            if stop_requested and not checkpoint_committed:
+                next_epoch = epoch
+                next_batch = batch_index
+                if next_batch >= dataset.sequence_count // args.batch_size:
+                    next_epoch += 1
+                    next_batch = 0
+                commit_checkpoint(next_epoch, next_batch)
             if stop_requested or (args.max_updates is not None and update >= args.max_updates):
                 break
         if stop_requested or (args.max_updates is not None and update >= args.max_updates):

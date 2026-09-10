@@ -171,16 +171,44 @@ def test_eject_check_rejects_live_training_lock(tmp_path, monkeypatch):
     root = tmp_path
     lock = root / "experiments" / "active" / "trial" / ".rnnoise-training.lock"
     lock.parent.mkdir(parents=True)
-    portable_storage._json_write(lock, {"pid": 42})
+    portable_storage._json_write(
+        lock, {"pid": 42, "hostname": "host", "started_at": "start"}
+    )
     (root / "inventory").mkdir()
     portable_storage._json_write(root / "inventory" / "volume.json", {"format_version": 1})
     monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {"volume_uuid": "id", "minimum_free_bytes": 0})
     monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
     monkeypatch.setattr(portable_storage, "sqlite_integrity", lambda database: "ok")
-    monkeypatch.setattr(portable_storage.os, "kill", lambda pid, signal: None)
+    monkeypatch.setattr(portable_storage, "_training_lock_is_live", lambda metadata: True)
 
     with pytest.raises(RuntimeError, match="training is still running"):
         portable_storage.eject_check(root)
+
+
+def test_finalize_verified_copy_rejects_symlinked_temporary_directory(tmp_path, monkeypatch):
+    root = tmp_path / "volume"
+    temporary = root / "datasets" / ".source.partial"
+    destination = root / "datasets" / "source"
+    external = tmp_path / "external"
+    external.mkdir()
+    temporary.parent.mkdir(parents=True)
+    temporary.symlink_to(external, target_is_directory=True)
+    (root / "inventory").mkdir()
+    portable_storage._json_write(
+        root / "inventory" / "datasets.json", {"format_version": 1, "datasets": []}
+    )
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {})
+
+    with pytest.raises(ValueError, match="real directory"):
+        portable_storage.finalize_verified_copy(
+            root,
+            temporary,
+            destination,
+            name="source",
+            source=tmp_path / "original",
+            files=2,
+            total_bytes=3,
+        )
 
 
 def test_eject_check_rejects_incomplete_checkpoint_manifest(tmp_path, monkeypatch):

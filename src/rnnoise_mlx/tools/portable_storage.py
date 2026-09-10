@@ -163,6 +163,22 @@ def _running_pid(root: Path) -> int | None:
     return pid
 
 
+def _training_lock_is_live(metadata: object) -> bool:
+    try:
+        if not isinstance(metadata, dict) or metadata["hostname"] != socket.gethostname():
+            return False
+        pid = int(metadata["pid"])
+        result = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        return result.returncode == 0 and result.stdout.strip() == metadata["started_at"]
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
+
+
 def start_mlflow(root: Path, port: int = 5000, timeout: float = 30.0) -> int:
     load_volume_config(root)
     running = _running_pid(root)
@@ -363,8 +379,13 @@ def finalize_verified_copy(
             _json_write(inventory_path, inventory)
             marker_path.unlink(missing_ok=True)
             return record
-        if not temporary.is_dir():
-            raise FileNotFoundError(f"temporary copy does not exist: {temporary}")
+        resolved_temporary = temporary.resolve()
+        if (
+            temporary.is_symlink()
+            or not temporary.is_dir()
+            or not _is_within(resolved_temporary, root.resolve())
+        ):
+            raise ValueError(f"temporary copy must be a real directory on the storage volume: {temporary}")
         _json_write(temporary / marker, record)
         os.replace(temporary, destination)
         inventory["datasets"].append(record)
@@ -397,8 +418,10 @@ def eject_check(root: Path) -> dict[str, object]:
     live_training = []
     for lock in root.rglob(".rnnoise-training.lock"):
         try:
-            pid = int(json.loads(lock.read_text())["pid"])
-            os.kill(pid, 0)
+            metadata = json.loads(lock.read_text())
+            pid = int(metadata["pid"])
+            if not _training_lock_is_live(metadata):
+                raise OSError
         except (OSError, ValueError, KeyError, json.JSONDecodeError):
             lock.unlink(missing_ok=True)
         else:

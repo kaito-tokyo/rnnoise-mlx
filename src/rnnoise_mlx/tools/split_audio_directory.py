@@ -21,6 +21,7 @@ def assignment(relative_path: str, eval_fraction: float, seed: int) -> str:
 
 def split(source: Path, output: Path, eval_fraction: float, seed: int) -> dict[str, object]:
     source = source.resolve()
+    output = output.resolve()
     paths = sorted(
         path for path in source.rglob("*") if path.suffix.lower() in AUDIO_SUFFIXES
     )
