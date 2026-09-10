@@ -21,15 +21,15 @@ def test_training_lock_replaces_stale_process_identity(tmp_path, monkeypatch):
     from rnnoise_mlx.training import train
 
     root = tmp_path / "volume"
-    output = root / "experiments" / "active" / "trial"
-    output.mkdir(parents=True)
-    lock = output / ".rnnoise-training.lock"
+    feature = root / "features" / "train.f32"
+    feature.parent.mkdir(parents=True)
+    lock = root / ".rnnoise-training.lock"
     lock.write_text(json.dumps({"pid": 42, "hostname": "host", "started_at": "old"}))
     monkeypatch.setenv("RNNOISE_MLX_STORAGE_ROOT", str(root))
     monkeypatch.setattr(train.socket, "gethostname", lambda: "host")
     monkeypatch.setattr(train, "_process_started_at", lambda pid: "current")
 
-    train._register_training_lock(output)
+    train._register_training_lock(tmp_path / "output", feature)
 
     assert json.loads(lock.read_text()) == {
         "pid": os.getpid(),

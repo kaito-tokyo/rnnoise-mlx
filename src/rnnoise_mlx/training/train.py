@@ -47,17 +47,17 @@ def _recover_initial_evaluation(output: Path, existing_run) -> dict | None:
     return initial_evaluation_from_run(existing_run) if existing_run is not None else None
 
 
-def _register_training_lock(output: Path) -> None:
+def _register_training_lock(*paths: Path | None) -> None:
     """Prevent eject-check from approving a volume with a live trainer."""
     root_value = os.environ.get("RNNOISE_MLX_STORAGE_ROOT")
     if not root_value:
         return
     root = Path(root_value).expanduser().resolve()
-    output = output.resolve()
-    if root not in output.parents:
+    resolved_paths = [path.resolve() for path in paths if path is not None]
+    if not any(path == root or root in path.parents for path in resolved_paths):
         return
-    lock = output / ".rnnoise-training.lock"
-    # Create exclusively so concurrent trainers cannot both claim this output.
+    lock = root / ".rnnoise-training.lock"
+    # Create exclusively so concurrent trainers cannot use the volume unsafely.
     if lock.exists():
         try:
             previous = json.loads(lock.read_text())
@@ -70,7 +70,7 @@ def _register_training_lock(output: Path) -> None:
         except (OSError, ValueError, KeyError, json.JSONDecodeError):
             lock.unlink(missing_ok=True)
         else:
-            raise RuntimeError(f"training output is already active: {output}")
+            raise RuntimeError(f"training volume is already active: {root}")
     try:
         with lock.open("x") as stream:
             stream.write(
@@ -84,7 +84,7 @@ def _register_training_lock(output: Path) -> None:
                 + "\n"
             )
     except FileExistsError:
-        raise RuntimeError(f"training output is already active: {output}") from None
+        raise RuntimeError(f"training volume is already active: {root}") from None
     atexit.register(lock.unlink, missing_ok=True)
 
 
@@ -190,7 +190,11 @@ def main():
         args.mlflow_tracking_uri, args.mlflow_experiment, args.mlflow_run_id
     )
     output.mkdir(parents=True, exist_ok=True)
-    _register_training_lock(output)
+    _register_training_lock(
+        output,
+        Path(args.features),
+        Path(args.eval_features) if args.eval_features else None,
+    )
     provenance_artifacts = list(args.provenance_artifact)
     for feature_path in (Path(args.features), args.eval_features):
         if feature_path is None:
