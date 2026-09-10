@@ -179,8 +179,24 @@ def _training_lock_is_live(metadata: object) -> bool:
         return False
 
 
+def _remove_pid_if_owned(root: Path, pid: int) -> None:
+    path = _pid_path(root)
+    try:
+        if int(json.loads(path.read_text())["pid"]) == pid:
+            path.unlink(missing_ok=True)
+    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+
+
 def start_mlflow(root: Path, port: int = 5000, timeout: float = 30.0) -> int:
     load_volume_config(root)
+    startup_lock = root / "runtime" / ".rnnoise-mlflow-start.lock"
+    with startup_lock.open("a+") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        return _start_mlflow_locked(root, port, timeout)
+
+
+def _start_mlflow_locked(root: Path, port: int, timeout: float) -> int:
     running = _running_pid(root)
     if running is not None:
         raise RuntimeError(f"MLflow is already running with PID {running}")
@@ -241,7 +257,8 @@ def start_mlflow(root: Path, port: int = 5000, timeout: float = 30.0) -> int:
                 except ProcessLookupError:
                     pass
                 process.wait()
-        _pid_path(root).unlink(missing_ok=True)
+        if process is not None:
+            _remove_pid_if_owned(root, process.pid)
         raise
     finally:
         log.close()
@@ -430,15 +447,18 @@ def eject_check(root: Path) -> dict[str, object]:
         raise RuntimeError(f"incomplete temporary paths remain: {partials[:5]}")
     live_training = []
     for lock in root.rglob(".rnnoise-training.lock"):
-        try:
-            metadata = json.loads(lock.read_text())
-            pid = int(metadata["pid"])
-            if not _training_lock_is_live(metadata):
-                raise OSError
-        except (OSError, ValueError, KeyError, json.JSONDecodeError):
-            lock.unlink(missing_ok=True)
-        else:
-            live_training.append(f"{lock.parent} (PID {pid})")
+        guard = lock.with_name(f"{lock.name}.guard")
+        with guard.open("a+") as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX)
+            try:
+                metadata = json.loads(lock.read_text())
+                pid = int(metadata["pid"])
+                if not _training_lock_is_live(metadata):
+                    raise OSError
+            except (OSError, ValueError, KeyError, json.JSONDecodeError):
+                lock.unlink(missing_ok=True)
+            else:
+                live_training.append(f"{lock.parent} (PID {pid})")
     if live_training:
         raise RuntimeError(f"training is still running: {live_training[:5]}")
     active_checkpoints = []

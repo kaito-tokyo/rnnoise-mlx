@@ -185,10 +185,21 @@ def test_running_pid_accepts_matching_mlflow_server(tmp_path, monkeypatch):
     assert portable_storage._running_pid(root) == 42
 
 
+def test_mlflow_failure_cleanup_preserves_another_process_pid_record(tmp_path):
+    (tmp_path / "mlflow").mkdir()
+    pid_path = tmp_path / "mlflow" / "mlflow.pid"
+    portable_storage._json_write(pid_path, {"pid": 43})
+
+    portable_storage._remove_pid_if_owned(tmp_path, 42)
+
+    assert __import__("json").loads(pid_path.read_text())["pid"] == 43
+
+
 def test_start_mlflow_waits_for_failed_process_before_removing_pid(tmp_path, monkeypatch):
     root = tmp_path
     (root / "mlflow" / "logs").mkdir(parents=True)
     (root / "mlflow" / "artifacts").mkdir()
+    (root / "runtime").mkdir()
 
     class Process:
         pid = 42
