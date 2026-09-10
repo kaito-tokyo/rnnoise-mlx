@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import tempfile
 import time
+from contextlib import nullcontext
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -80,9 +81,14 @@ def _client(uri: str):
 def download_checkpoint(client, run_id: str, destination: Path, update: int | None = None) -> Path:
     """Select a committed generation, validate, then atomically publish locally."""
     destination = destination.absolute()
-    from .portable_storage import registered_volume_for_paths
+    from .portable_storage import registered_volume_for_paths, volume_operation_guard
 
-    registered_volume_for_paths([destination])
+    portable_root = registered_volume_for_paths([destination])
+    with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        return _download_checkpoint(client, run_id, destination, update)
+
+
+def _download_checkpoint(client, run_id: str, destination: Path, update: int | None = None) -> Path:
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"checkpoint destination exists: {destination}")
     candidates = []

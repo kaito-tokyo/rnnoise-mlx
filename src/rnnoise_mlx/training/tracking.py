@@ -132,6 +132,8 @@ class MLflowTracker:
         existing_run = validate_tracking_target(tracking_uri, experiment, run_id)
         tags = {
             "job_type": "training",
+            "logical_status": "active",
+            "stop_requested": "false",
             **_git_metadata(Path(__file__).resolve().parents[3]),
         }
         if run_id is None:

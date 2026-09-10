@@ -80,6 +80,19 @@ def test_tracker_reuses_existing_run_and_retains_name(tmp_path, monkeypatch):
     ) in calls
 
 
+def test_new_run_starts_with_active_logical_status(tmp_path, monkeypatch):
+    calls = _mock_mlflow(monkeypatch)
+    monkeypatch.setattr(tracking.mlflow, "set_experiment", lambda name: None)
+
+    tracking.MLflowTracker(
+        "http://mlflow.test", "rnnoise-mlx", "new", None, tmp_path, {"batch_size": 8}
+    )
+
+    start = next(value for name, value in calls if name == "start_run")
+    assert start["tags"]["logical_status"] == "active"
+    assert start["tags"]["stop_requested"] == "false"
+
+
 def test_pause_marks_run_killed_with_resumable_state(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(tracking.mlflow, "set_tags", lambda tags: calls.append(("set_tags", tags)))
