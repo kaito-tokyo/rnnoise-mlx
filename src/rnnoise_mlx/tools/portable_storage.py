@@ -449,7 +449,7 @@ def main() -> None:
     if args.command == "init":
         result = initialize(args.root)
     elif args.command == "preflight":
-        result = preflight(args.root)
+        result = load_volume_config(args.root)
     elif args.command == "mlflow-start":
         result = {"pid": start_mlflow(args.root, args.port), "tracking_uri": f"http://127.0.0.1:{args.port}"}
     elif args.command == "mlflow-stop":

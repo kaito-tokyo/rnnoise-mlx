@@ -53,6 +53,13 @@ def test_registered_operations_reject_self_declared_uuid(tmp_path, monkeypatch):
         portable_storage.initialize(tmp_path, "other")
 
 
+def test_preflight_cli_requires_initialized_volume(tmp_path, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["storage", "--root", str(tmp_path), "preflight"])
+
+    with pytest.raises(FileNotFoundError, match="not initialized"):
+        portable_storage.main()
+
+
 def test_initialize_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.setattr(portable_storage, "DEFAULT_ROOT", tmp_path)
     monkeypatch.setattr(
