@@ -373,7 +373,10 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def verify_copy(source: Path, destination: Path, record: Path | None = None) -> dict[str, object]:
-    portable_root = registered_volume_for_paths([source, destination])
+    paths = [source, destination]
+    if record is not None:
+        paths.append(record)
+    portable_root = registered_volume_for_paths(paths)
     with volume_operation_guard(portable_root) if portable_root else nullcontext():
         return _verify_copy_locked(source, destination, record)
 
@@ -404,7 +407,9 @@ def _verify_copy_locked(source: Path, destination: Path, record: Path | None = N
 
 
 def copy_tree(source: Path, destination: Path, record: Path) -> dict[str, object]:
-    portable_root = registered_volume_for_paths([destination])
+    if destination.is_symlink():
+        raise FileExistsError(f"copy destination exists: {destination}")
+    portable_root = registered_volume_for_paths([destination, record])
     with volume_operation_guard(portable_root) if portable_root else nullcontext():
         return _copy_tree_locked(source, destination, record)
 

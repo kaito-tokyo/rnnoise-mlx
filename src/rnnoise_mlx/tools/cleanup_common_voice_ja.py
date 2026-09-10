@@ -16,6 +16,7 @@ from pathlib import Path
 import shutil
 import subprocess
 from typing import Any, Protocol
+import unicodedata
 
 
 SPEEX_PREPROCESS_SET_DENOISE = 0
@@ -234,7 +235,7 @@ def validate_records(records: list[dict[str, Any]], threshold: float) -> None:
         if source.is_absolute() or ".." in source.parts:
             raise ValueError(f"input path escapes the corpus root: {source}")
         output = source.with_suffix(".wav")
-        output_key = Path(output.as_posix().casefold())
+        output_key = Path(unicodedata.normalize("NFC", output.as_posix().casefold()))
         if output_key in output_sources:
             raise ValueError(
                 f"accepted inputs map to the same output: {output_sources[output_key]} and {source}"
@@ -379,7 +380,6 @@ def main() -> None:
 
     try:
         library_path = resolve_library(args.speex_library)
-        speex = SpeexDSP(library_path)
         records = load_records(filter_manifest)
         validate_records(records, args.threshold)
     except (FileNotFoundError, OSError, ValueError) as error:
@@ -392,6 +392,7 @@ def main() -> None:
     )
     with cleanup_output_guard(output_root):
         with volume_operation_guard(portable_root) if portable_root else nullcontext():
+            speex = SpeexDSP(library_path)
             missing = [str(record["path"]) for record in records
                        if not (source_root / str(record["path"])).is_file()]
             if missing:

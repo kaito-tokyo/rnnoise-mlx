@@ -64,7 +64,23 @@ def test_training_lock_uses_default_volume_when_environment_is_unset(tmp_path, m
 def test_downloaded_checkpoint_must_match_resumed_run(tmp_path):
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()
-    (checkpoint / "complete.json").write_text(json.dumps({"run_id": "source-run"}))
+    files = {
+        "model.safetensors", "optimizer.safetensors", "mlx-random-state.safetensors",
+        "trainer-state.json",
+    }
+    for name in files - {"trainer-state.json"}:
+        (checkpoint / name).write_bytes(b"payload")
+    (checkpoint / "trainer-state.json").write_text(json.dumps({"format_version": 1, "update": 1}))
+    manifest = {"format_version": 1, "files": {
+        name: hashlib.sha256((checkpoint / name).read_bytes()).hexdigest() for name in files
+    }}
+    (checkpoint / "manifest.json").write_text(json.dumps(manifest))
+    (checkpoint / "complete.json").write_text(json.dumps({
+        "format_version": 1,
+        "run_id": "source-run",
+        "update": 1,
+        "manifest_sha256": hashlib.sha256((checkpoint / "manifest.json").read_bytes()).hexdigest(),
+    }))
 
     with pytest.raises(ValueError, match="does not match"):
         _validate_downloaded_checkpoint_run(checkpoint, "target-run")

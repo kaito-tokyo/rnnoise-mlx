@@ -23,13 +23,17 @@ def assignment(relative_path: str, eval_fraction: float, seed: int) -> str:
 def split(source: Path, output: Path, eval_fraction: float, seed: int) -> dict[str, object]:
     source = source.resolve()
     output = output.resolve()
-    paths = sorted(
-        path for path in source.rglob("*") if path.suffix.lower() in AUDIO_SUFFIXES
-    )
     from rnnoise_mlx.tools.portable_storage import registered_volume_for_paths, volume_operation_guard
 
-    portable_root = registered_volume_for_paths([source, output, *(path.resolve() for path in paths)])
+    portable_root = registered_volume_for_paths([source, output])
     with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        paths = sorted(
+            path for path in source.rglob("*") if path.suffix.lower() in AUDIO_SUFFIXES
+        )
+        target_root = registered_volume_for_paths([*(path.resolve() for path in paths)])
+        if target_root is not None and target_root != portable_root:
+            with volume_operation_guard(target_root):
+                return _split_locked(source, output, paths, eval_fraction, seed)
         return _split_locked(source, output, paths, eval_fraction, seed)
 
 
