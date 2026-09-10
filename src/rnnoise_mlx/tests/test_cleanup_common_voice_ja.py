@@ -8,6 +8,7 @@ from rnnoise_mlx.tools.cleanup_common_voice_ja import (
     denoise_pcm,
     require_internal_output,
     sha256,
+    validate_records,
     validate_resume,
 )
 
@@ -98,6 +99,18 @@ def test_cleanup_one_rejects_path_traversal(tmp_path: Path):
             {"path": "../clip.mp3", "input_sha256": "unused", "onsets_seconds": {"-40": 0.25}},
             lambda: FakePreprocessor(), -40, 7_200, 48_000, 960,
         )
+
+
+def test_validate_records_rejects_duplicate_wav_outputs_and_missing_onsets():
+    duplicate = [
+        {"path": "train/clip.mp3", "onsets_seconds": {"-40": 0.1}},
+        {"path": "train/clip.flac", "onsets_seconds": {"-40": 0.2}},
+    ]
+    with pytest.raises(ValueError, match="same output"):
+        validate_records(duplicate, -40)
+
+    with pytest.raises(ValueError, match="no onset"):
+        validate_records([{"path": "train/clip.mp3", "onsets_seconds": {}}], -40)
 
 
 def test_resume_rejects_changed_input_or_incomplete_output(tmp_path: Path):

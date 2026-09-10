@@ -224,6 +224,16 @@ def test_temporary_path_detection_does_not_match_ordinary_partial_names():
     assert not portable_storage._is_temporary_path(Path("partial_speech.wav"))
 
 
+def test_eject_check_scans_temporary_paths_outside_dataset_roots(tmp_path, monkeypatch):
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / ".copy.partial-1").mkdir()
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {"volume_uuid": "id", "minimum_free_bytes": 0})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+
+    with pytest.raises(RuntimeError, match="incomplete temporary"):
+        portable_storage.eject_check(tmp_path)
+
+
 def test_eject_check_rejects_live_training_lock(tmp_path, monkeypatch):
     root = tmp_path
     lock = root / "experiments" / "active" / "trial" / ".rnnoise-training.lock"

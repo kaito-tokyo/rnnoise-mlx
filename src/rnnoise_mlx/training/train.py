@@ -6,6 +6,7 @@ import argparse
 import atexit
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+import fcntl
 from functools import partial
 import json
 import os
@@ -57,37 +58,43 @@ def _register_training_lock(*paths: Path | None) -> None:
     resolved_paths = [path.resolve() for path in paths if path is not None]
     if not any(path == root or root in path.parents for path in resolved_paths):
         return
+    from rnnoise_mlx.tools.portable_storage import load_volume_config
+
+    load_volume_config(root)
     lock = root / ".rnnoise-training.lock"
+    guard = root / ".rnnoise-training.lock.guard"
     # Create exclusively so concurrent trainers cannot use the volume unsafely.
-    if lock.exists():
+    with guard.open("a+") as guard_stream:
+        fcntl.flock(guard_stream, fcntl.LOCK_EX)
+        if lock.exists():
+            try:
+                previous = json.loads(lock.read_text())
+                pid = int(previous["pid"])
+                if (
+                    previous["hostname"] != socket.gethostname()
+                    or previous["started_at"] != _process_started_at(pid)
+                ):
+                    raise OSError
+            except (OSError, ValueError, KeyError, json.JSONDecodeError):
+                lock.unlink(missing_ok=True)
+            else:
+                raise RuntimeError(f"training volume is already active: {root}")
+        metadata = {
+            "pid": os.getpid(),
+            "hostname": socket.gethostname(),
+            "started_at": _process_started_at(os.getpid()),
+        }
+        temporary = lock.with_name(f".{lock.name}.{uuid4().hex}.tmp")
         try:
-            previous = json.loads(lock.read_text())
-            pid = int(previous["pid"])
-            if (
-                previous["hostname"] != socket.gethostname()
-                or previous["started_at"] != _process_started_at(pid)
-            ):
-                raise OSError
-        except (OSError, ValueError, KeyError, json.JSONDecodeError):
-            lock.unlink(missing_ok=True)
-        else:
-            raise RuntimeError(f"training volume is already active: {root}")
-    metadata = {
-        "pid": os.getpid(),
-        "hostname": socket.gethostname(),
-        "started_at": _process_started_at(os.getpid()),
-    }
-    temporary = lock.with_name(f".{lock.name}.{uuid4().hex}.tmp")
-    try:
-        with temporary.open("x") as stream:
-            stream.write(json.dumps(metadata) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.link(temporary, lock)
-    except FileExistsError:
-        raise RuntimeError(f"training volume is already active: {root}") from None
-    finally:
-        temporary.unlink(missing_ok=True)
+            with temporary.open("x") as stream:
+                stream.write(json.dumps(metadata) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.link(temporary, lock)
+        except FileExistsError:
+            raise RuntimeError(f"training volume is already active: {root}") from None
+        finally:
+            temporary.unlink(missing_ok=True)
     atexit.register(lock.unlink, missing_ok=True)
 
 
@@ -206,7 +213,6 @@ def main():
     existing_run = validate_tracking_target(
         args.mlflow_tracking_uri, args.mlflow_experiment, args.mlflow_run_id
     )
-    output.mkdir(parents=True, exist_ok=True)
     _register_training_lock(
         output,
         Path(args.features),
@@ -224,6 +230,9 @@ def main():
         vars(args), "eval_features"
     )
     dataset = FeatureDataset(args.features, args.sequence_length)
+    if dataset.sequence_count < args.batch_size:
+        raise ValueError("feature dataset must contain at least one complete batch")
+    output.mkdir(parents=True, exist_ok=True)
     mx.random.seed(args.seed)
     config = ModelConfig()
     (output / "model-config.json").write_text(

@@ -423,13 +423,7 @@ def eject_check(root: Path) -> dict[str, object]:
         raise RuntimeError(f"MLflow is still running with PID {running}")
     partials = [
         str(path)
-        for base in (
-            root / "datasets",
-            root / "features",
-            root / "experiments",
-            root / "references",
-        )
-        for path in base.rglob("*")
+        for path in root.rglob("*")
         if _is_temporary_path(path)
     ]
     if partials:

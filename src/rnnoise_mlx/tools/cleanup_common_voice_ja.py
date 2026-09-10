@@ -8,6 +8,7 @@ import ctypes
 import ctypes.util
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -205,6 +206,28 @@ def load_records(manifest_path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def validate_records(records: list[dict[str, Any]], threshold: float) -> None:
+    """Validate every worker input before publishing any cleaned output."""
+    output_sources: dict[Path, Path] = {}
+    threshold_key = f"{threshold:g}"
+    for record in records:
+        source = Path(str(record["path"]))
+        if source.is_absolute() or ".." in source.parts:
+            raise ValueError(f"input path escapes the corpus root: {source}")
+        output = source.with_suffix(".wav")
+        if output in output_sources:
+            raise ValueError(
+                f"accepted inputs map to the same output: {output_sources[output]} and {source}"
+            )
+        output_sources[output] = source
+        try:
+            onset = float(record["onsets_seconds"][threshold_key])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError(f"accepted input has no onset at {threshold_key} dBFS: {source}") from None
+        if not math.isfinite(onset):
+            raise ValueError(f"accepted input has an invalid onset at {threshold_key} dBFS: {source}")
+
+
 def cleanup_contract(
     source_root: Path,
     filter_manifest: Path,
@@ -315,6 +338,7 @@ def main() -> None:
         library_path = resolve_library(args.speex_library)
         speex = SpeexDSP(library_path)
         records = load_records(filter_manifest)
+        validate_records(records, args.threshold)
     except (FileNotFoundError, OSError, ValueError) as error:
         parser.error(str(error))
 

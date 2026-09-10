@@ -32,6 +32,7 @@ def test_training_lock_replaces_stale_process_identity(tmp_path, monkeypatch):
     monkeypatch.setenv("RNNOISE_MLX_STORAGE_ROOT", str(root))
     monkeypatch.setattr(train.socket, "gethostname", lambda: "host")
     monkeypatch.setattr(train, "_process_started_at", lambda pid: "current")
+    monkeypatch.setattr("rnnoise_mlx.tools.portable_storage.load_volume_config", lambda root: {})
 
     train._register_training_lock(tmp_path / "output", feature)
 
