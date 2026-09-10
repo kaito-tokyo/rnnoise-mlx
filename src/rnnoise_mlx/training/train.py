@@ -318,24 +318,25 @@ def main():
         )
         tracker.log_evaluation("initial", initial_evaluation, 0)
     if stop_requested:
-        checkpoint = save_checkpoint(
-            output / "checkpoints",
-            model,
-            optimizer,
-            config,
-            update=update,
-            next_epoch=1,
-            next_batch=0,
-            processed_frames=processed_frames,
-            elapsed_seconds=elapsed_before_resume,
-            history=history,
-            training_config=vars(args),
-            initial_evaluation=initial_evaluation,
-            feature_identity=verified_feature_identity,
-            evaluation_feature_identity=verified_evaluation_feature_identity,
-        )
-        if args.mlflow_log_checkpoints:
-            tracker.log_checkpoint(checkpoint, update)
+        if args.resume_from is None:
+            checkpoint = save_checkpoint(
+                output / "checkpoints",
+                model,
+                optimizer,
+                config,
+                update=update,
+                next_epoch=1,
+                next_batch=0,
+                processed_frames=processed_frames,
+                elapsed_seconds=elapsed_before_resume,
+                history=history,
+                training_config=vars(args),
+                initial_evaluation=initial_evaluation,
+                feature_identity=verified_feature_identity,
+                evaluation_feature_identity=verified_evaluation_feature_identity,
+            )
+            if args.mlflow_log_checkpoints:
+                tracker.log_checkpoint(checkpoint, update)
         summary = {
             "updates": update,
             "stop_requested": True,

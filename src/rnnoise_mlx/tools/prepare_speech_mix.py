@@ -245,7 +245,11 @@ def main() -> None:
         for split in ("train", "eval"):
             weight = int(configured.get(f"{split}_weight", configured.get("weight", 0)))
             if weight > 0:
-                guarded_paths.append(resolve_config_path(configured[split]))
+                source = resolve_config_path(configured[split])
+                guarded_paths.append(source)
+                source_type = str(configured.get(f"{split}_type", configured.get("type", "audio-directory")))
+                if source_type == "audio-directory" and source.is_dir():
+                    guarded_paths.extend(path.resolve() for path in stable_audio_paths(source, f"{split}:{configured['name']}"))
     portable_root = registered_volume_for_paths(guarded_paths)
     with volume_operation_guard(portable_root) if portable_root else nullcontext():
         output.mkdir(parents=True, exist_ok=False)

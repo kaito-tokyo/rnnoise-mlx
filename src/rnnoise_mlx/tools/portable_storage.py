@@ -342,13 +342,19 @@ def _stop_mlflow_locked(root: Path, timeout: float) -> str:
 
 
 def _tree_summary(path: Path, include_hashes: bool) -> dict[str, object]:
-    files = sorted(item for item in path.rglob("*") if item.is_file())
+    files = sorted(item for item in path.rglob("*") if item.is_file() and not item.is_symlink())
     records = []
     total = 0
-    for item in files:
+    for item in sorted(path.rglob("*")):
+        relative = item.relative_to(path).as_posix()
+        if item.is_symlink():
+            records.append({"path": relative, "type": "symlink", "target": os.readlink(item)})
+            continue
+        if not item.is_file():
+            continue
         size = item.stat().st_size
         total += size
-        record: dict[str, object] = {"path": item.relative_to(path).as_posix(), "bytes": size}
+        record: dict[str, object] = {"path": relative, "bytes": size}
         if include_hashes:
             digest = hashlib.sha256()
             with item.open("rb") as stream:

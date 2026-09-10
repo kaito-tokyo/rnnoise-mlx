@@ -152,6 +152,20 @@ def test_copy_tree_preserves_directory_symlinks(tmp_path):
     assert (destination / "linked").is_symlink()
 
 
+def test_verify_copy_rejects_a_missing_directory_symlink(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    external = tmp_path / "external"
+    source.mkdir()
+    destination.mkdir()
+    external.mkdir()
+    (external / "file").write_bytes(b"payload")
+    (source / "linked").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="differs"):
+        portable_storage.verify_copy(source, destination)
+
+
 def test_copy_tree_cli_requires_destination_on_registered_volume(tmp_path, monkeypatch):
     root = tmp_path / "volume"
     source = tmp_path / "source"

@@ -81,9 +81,15 @@ def _client(uri: str):
 def download_checkpoint(client, run_id: str, destination: Path, update: int | None = None) -> Path:
     """Select a committed generation, validate, then atomically publish locally."""
     destination = destination.absolute()
-    from .portable_storage import registered_volume_for_paths, volume_operation_guard
-
-    portable_root = registered_volume_for_paths([destination])
+    try:
+        from .portable_storage import registered_volume_for_paths, volume_operation_guard
+    except ModuleNotFoundError as error:
+        if error.name != "fcntl":
+            raise
+        portable_root = None
+        volume_operation_guard = None
+    else:
+        portable_root = registered_volume_for_paths([destination])
     with volume_operation_guard(portable_root) if portable_root else nullcontext():
         return _download_checkpoint(client, run_id, destination, update)
 
