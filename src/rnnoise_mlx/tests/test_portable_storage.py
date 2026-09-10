@@ -167,6 +167,63 @@ def test_running_pid_accepts_matching_mlflow_server(tmp_path, monkeypatch):
     assert portable_storage._running_pid(root) == 42
 
 
+def test_start_mlflow_waits_for_failed_process_before_removing_pid(tmp_path, monkeypatch):
+    root = tmp_path
+    (root / "mlflow" / "logs").mkdir(parents=True)
+    (root / "mlflow" / "artifacts").mkdir()
+
+    class Process:
+        pid = 42
+
+        def __init__(self):
+            self.terminated = False
+            self.waited = False
+
+        def poll(self):
+            return 0 if self.waited else None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            assert self.terminated
+            self.waited = True
+
+    class Probe:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def setsockopt(self, *args):
+            pass
+
+        def bind(self, address):
+            pass
+
+    process = Process()
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+    monkeypatch.setattr(portable_storage.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(portable_storage.os, "killpg", lambda pid, signal: process.terminate())
+    monkeypatch.setattr(portable_storage.socket, "socket", lambda *args: Probe())
+
+    with pytest.raises(TimeoutError):
+        portable_storage.start_mlflow(root, timeout=0)
+
+    assert process.waited
+    assert not (root / "mlflow" / "mlflow.pid").exists()
+
+
+def test_temporary_path_detection_does_not_match_ordinary_partial_names():
+    assert portable_storage._is_temporary_path(Path("clip.partial.wav"))
+    assert portable_storage._is_temporary_path(Path(".copy.partial-1"))
+    assert portable_storage._is_temporary_path(Path(".record.tmp-1"))
+    assert portable_storage._is_temporary_path(Path("archive.part"))
+    assert not portable_storage._is_temporary_path(Path("partial_speech.wav"))
+
+
 def test_eject_check_rejects_live_training_lock(tmp_path, monkeypatch):
     root = tmp_path
     lock = root / "experiments" / "active" / "trial" / ".rnnoise-training.lock"

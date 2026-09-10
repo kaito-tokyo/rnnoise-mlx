@@ -20,6 +20,7 @@ gpu=""
 auth_key_file="$HOME/.config/rnnoise/tailscale-colab-authkey"
 identity="$HOME/.ssh/colab_runtime_ed25519"
 create=1
+stop_on_failure=0
 while (($#)); do
   case "$1" in
     --session) session=${2:?}; shift 2 ;;
@@ -41,6 +42,15 @@ if (( create )); then
   args=(new --session "$session")
   [[ -n "$gpu" ]] && args+=(--gpu "$gpu")
   colab "${args[@]}"
+  stop_on_failure=1
+  cleanup_session() {
+    local status=$?
+    if (( stop_on_failure )); then
+      colab stop --session "$session" >&2 || true
+    fi
+    exit "$status"
+  }
+  trap cleanup_session EXIT
 fi
 
 ssh_args=(
@@ -70,6 +80,9 @@ bash'
   cat "$auth_key_file"
   cat "$script_dir/bootstrap_tailscale.sh"
 } | ssh "${ssh_args[@]}" "$remote_env bash -c $(printf '%q' "$remote_command")"
+
+stop_on_failure=0
+trap - EXIT
 
 cat <<EOF
 

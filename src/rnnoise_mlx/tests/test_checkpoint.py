@@ -12,7 +12,11 @@ import numpy as np
 from mlx.utils import tree_flatten
 
 from rnnoise_mlx.training.checkpoint import load_checkpoint, save_checkpoint
-from rnnoise_mlx.training.train import _feature_manifest, _recover_initial_evaluation
+from rnnoise_mlx.training.train import (
+    _feature_manifest,
+    _recover_initial_evaluation,
+    _validate_downloaded_checkpoint_run,
+)
 from rnnoise_mlx.training.model import ModelConfig, RNNoise
 from rnnoise_mlx.training.tracking import MLflowTracker
 
@@ -36,6 +40,17 @@ def test_training_lock_replaces_stale_process_identity(tmp_path, monkeypatch):
         "hostname": "host",
         "started_at": "current",
     }
+
+
+def test_downloaded_checkpoint_must_match_resumed_run(tmp_path):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "complete.json").write_text(json.dumps({"run_id": "source-run"}))
+
+    with pytest.raises(ValueError, match="does not match"):
+        _validate_downloaded_checkpoint_run(checkpoint, "target-run")
+
+    _validate_downloaded_checkpoint_run(checkpoint, "source-run")
 
 
 @pytest.mark.parametrize("uri", ["file:///tmp/mlruns", "sqlite:///mlflow.db", "http://unavailable.invalid"])

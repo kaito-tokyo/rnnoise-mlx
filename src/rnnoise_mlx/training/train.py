@@ -14,6 +14,7 @@ import socket
 import subprocess
 from pathlib import Path
 import time
+from uuid import uuid4
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -71,20 +72,22 @@ def _register_training_lock(*paths: Path | None) -> None:
             lock.unlink(missing_ok=True)
         else:
             raise RuntimeError(f"training volume is already active: {root}")
+    metadata = {
+        "pid": os.getpid(),
+        "hostname": socket.gethostname(),
+        "started_at": _process_started_at(os.getpid()),
+    }
+    temporary = lock.with_name(f".{lock.name}.{uuid4().hex}.tmp")
     try:
-        with lock.open("x") as stream:
-            stream.write(
-                json.dumps(
-                    {
-                        "pid": os.getpid(),
-                        "hostname": socket.gethostname(),
-                        "started_at": _process_started_at(os.getpid()),
-                    }
-                )
-                + "\n"
-            )
+        with temporary.open("x") as stream:
+            stream.write(json.dumps(metadata) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, lock)
     except FileExistsError:
         raise RuntimeError(f"training volume is already active: {root}") from None
+    finally:
+        temporary.unlink(missing_ok=True)
     atexit.register(lock.unlink, missing_ok=True)
 
 
@@ -99,6 +102,20 @@ def _process_started_at(pid: int) -> str:
     if not started_at:
         raise OSError(f"process is not running: {pid}")
     return started_at
+
+
+def _validate_downloaded_checkpoint_run(checkpoint: Path, run_id: str | None) -> None:
+    marker = checkpoint / "complete.json"
+    if marker.is_symlink() or (marker.exists() and not marker.is_file()):
+        raise ValueError(f"invalid downloaded checkpoint marker: {marker}")
+    if not marker.exists():
+        return
+    try:
+        marker_run_id = json.loads(marker.read_text())["run_id"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        raise ValueError(f"invalid downloaded checkpoint marker: {marker}") from None
+    if marker_run_id != run_id:
+        raise ValueError("downloaded checkpoint run_id does not match --mlflow-run-id")
 
 
 def main():
@@ -223,6 +240,7 @@ def main():
     elapsed_before_resume = 0.0
     initial_evaluation = None
     if args.resume_from:
+        _validate_downloaded_checkpoint_run(args.resume_from, args.mlflow_run_id)
         restored = load_checkpoint(
             args.resume_from.resolve(),
             model,

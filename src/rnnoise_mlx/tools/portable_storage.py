@@ -229,7 +229,18 @@ def start_mlflow(root: Path, port: int = 5000, timeout: float = 30.0) -> int:
         raise TimeoutError(f"MLflow did not become healthy: {health}")
     except BaseException:
         if process is not None and process.poll() is None:
-            process.terminate()
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
         _pid_path(root).unlink(missing_ok=True)
         raise
     finally:
@@ -397,6 +408,14 @@ def finalize_verified_copy(
         lock_stream.close()
 
 
+def _is_temporary_path(path: Path) -> bool:
+    name = path.name
+    return (
+        name.endswith((".partial", ".partial.wav", ".part"))
+        or (name.startswith(".") and (".partial-" in name or ".tmp-" in name))
+    )
+
+
 def eject_check(root: Path) -> dict[str, object]:
     config = load_volume_config(root)
     running = _running_pid(root)
@@ -411,7 +430,7 @@ def eject_check(root: Path) -> dict[str, object]:
             root / "references",
         )
         for path in base.rglob("*")
-        if "partial" in path.name or ".tmp-" in path.name
+        if _is_temporary_path(path)
     ]
     if partials:
         raise RuntimeError(f"incomplete temporary paths remain: {partials[:5]}")
