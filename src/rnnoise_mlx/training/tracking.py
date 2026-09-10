@@ -140,7 +140,7 @@ class MLflowTracker:
         else:
             assert existing_run is not None
             self.run = mlflow.start_run(run_id=run_id)
-            mlflow.set_tags({**tags, "resumed": "true"})
+            mlflow.set_tags({**tags, "resumed": "true", "logical_status": "active", "stop_requested": "false"})
         self.closed = False
         normalized = _json_value(
             {key: value for key, value in parameters.items() if key != "mlflow_run_id"}
@@ -246,6 +246,7 @@ class MLflowTracker:
         mlflow.log_artifact(str(output / "model.safetensors"), artifact_path="model")
         mlflow.log_artifact(str(output / "model-config.json"), artifact_path="model")
         mlflow.log_artifact(str(output / "training.json"), artifact_path="model")
+        mlflow.set_tags({"logical_status": "completed", "stop_requested": "false"})
         mlflow.end_run(status="FINISHED")
         self.closed = True
 

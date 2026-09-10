@@ -57,7 +57,7 @@ def test_cleanup_one_denoises_before_trimming_and_resumes(tmp_path: Path, monkey
         output.write_bytes(b"wave")
 
     monkeypatch.setattr("rnnoise_mlx.tools.cleanup_common_voice_ja.encode_wav", fake_encode)
-    record = {"path": "train/clip.mp3", "onsets_seconds": {"-40": 0.004}}
+    record = {"path": "train/clip.mp3", "input_sha256": sha256(source), "onsets_seconds": {"-40": 0.004}}
     first = cleanup_one(
         source_root, output_root, record, factory, -40, margin_samples=1,
         sample_rate=1000, frame_size=4,
@@ -95,7 +95,7 @@ def test_cleanup_one_rejects_path_traversal(tmp_path: Path):
     with pytest.raises(ValueError, match="escapes the corpus root"):
         cleanup_one(
             tmp_path / "input", tmp_path / "output",
-            {"path": "../clip.mp3", "onsets_seconds": {"-40": 0.25}},
+            {"path": "../clip.mp3", "input_sha256": "unused", "onsets_seconds": {"-40": 0.25}},
             lambda: FakePreprocessor(), -40, 7_200, 48_000, 960,
         )
 

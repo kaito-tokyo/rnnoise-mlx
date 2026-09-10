@@ -170,6 +170,12 @@ def start_mlflow(root: Path, port: int = 5000, timeout: float = 30.0) -> int:
     database = root / "mlflow" / "mlflow.db"
     artifacts = root / "mlflow" / "artifacts"
     log_path = root / "mlflow" / "logs" / "server.log"
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError as error:
+            raise RuntimeError(f"MLflow port is already in use: {port}") from error
     log = log_path.open("ab", buffering=0)
     command = [
         sys.executable,
@@ -322,14 +328,19 @@ def finalize_verified_copy(
         raise ValueError("temporary and destination must be siblings")
     if root not in destination.resolve().parents:
         raise ValueError("destination must be on the registered storage volume")
-    if not temporary.is_dir():
-        raise FileNotFoundError(f"temporary copy does not exist: {temporary}")
-    if destination.exists():
-        raise FileExistsError(f"destination already exists: {destination}")
     inventory_path = root / "inventory" / "datasets.json"
     inventory = json.loads(inventory_path.read_text())
     if any(item.get("name") == name for item in inventory["datasets"]):
         raise ValueError(f"dataset is already registered: {name}")
+    if destination.exists():
+        if not destination.is_dir():
+            raise FileExistsError(f"destination already exists: {destination}")
+        record = {"name": name, "source": str(source.resolve()), "destination": str(destination.resolve()), "files": files, "bytes": total_bytes, "verification": "rsync-checksum-dry-run"}
+        inventory["datasets"].append(record)
+        _json_write(inventory_path, inventory)
+        return record
+    if not temporary.is_dir():
+        raise FileNotFoundError(f"temporary copy does not exist: {temporary}")
     os.replace(temporary, destination)
     record = {
         "name": name,
@@ -358,12 +369,12 @@ def eject_check(root: Path) -> dict[str, object]:
             root / "references",
         )
         for path in base.rglob("*")
-        if path.name.startswith(".") and ("partial" in path.name or ".tmp-" in path.name)
+        if "partial" in path.name or ".tmp-" in path.name
     ]
     if partials:
         raise RuntimeError(f"incomplete temporary paths remain: {partials[:5]}")
     live_training = []
-    for lock in (root / "experiments" / "active").rglob(".rnnoise-training.lock"):
+    for lock in root.rglob(".rnnoise-training.lock"):
         try:
             pid = int(json.loads(lock.read_text())["pid"])
             os.kill(pid, 0)

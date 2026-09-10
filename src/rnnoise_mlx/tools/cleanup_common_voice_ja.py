@@ -166,6 +166,8 @@ def cleanup_one(source_root: Path, output_root: Path, record: dict[str, Any],
     if source_relative.is_absolute() or ".." in source_relative.parts:
         raise ValueError(f"input path escapes the corpus root: {source_relative}")
     source = source_root / source_relative
+    if record.get("input_sha256") != sha256(source):
+        raise ValueError(f"input checksum differs from filter manifest: {source_relative}")
     output_relative = source_relative.with_suffix(".wav")
     output = output_root / output_relative
     onset = float(record["onsets_seconds"][f"{threshold:g}"])
