@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -270,9 +271,17 @@ def _tree_summary(path: Path, include_hashes: bool) -> dict[str, object]:
     return {"files": len(files), "bytes": total, "records": records}
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
 def verify_copy(source: Path, destination: Path, record: Path | None = None) -> dict[str, object]:
     if not source.is_dir() or not destination.is_dir():
         raise FileNotFoundError("source and destination must both be directories")
+    if record is not None:
+        record = record.resolve()
+        if _is_within(record, source.resolve()) or _is_within(record, destination.resolve()):
+            raise ValueError("verification record must be outside source and destination")
     source_summary = _tree_summary(source, True)
     destination_summary = _tree_summary(destination, True)
     matched = source_summary == destination_summary
@@ -296,6 +305,9 @@ def copy_tree(source: Path, destination: Path, record: Path) -> dict[str, object
     destination = destination.resolve()
     if source == destination or source in destination.parents:
         raise ValueError("copy destination must not be inside the source")
+    record = record.resolve()
+    if _is_within(record, source) or _is_within(record, destination):
+        raise ValueError("verification record must be outside source and destination")
     if destination.exists():
         if record.exists():
             raise FileExistsError(f"destination already exists: {destination}")
@@ -334,27 +346,34 @@ def finalize_verified_copy(
     if root not in destination.resolve().parents:
         raise ValueError("destination must be on the registered storage volume")
     inventory_path = root / "inventory" / "datasets.json"
-    inventory = json.loads(inventory_path.read_text())
-    if any(item.get("name") == name for item in inventory["datasets"]):
-        raise ValueError(f"dataset is already registered: {name}")
-    record = {"name": name, "source": str(source.resolve()), "destination": str(destination.resolve()), "files": files, "bytes": total_bytes, "verification": "rsync-checksum-dry-run"}
-    marker = ".rnnoise-finalize-verified.json"
-    if destination.exists():
-        marker_path = destination / marker
-        if not destination.is_dir() or not marker_path.is_file() or json.loads(marker_path.read_text()) != record:
-            raise FileExistsError(f"destination already exists: {destination}")
+    lock_path = root / "inventory" / "datasets.lock"
+    lock_stream = lock_path.open("a+")
+    fcntl.flock(lock_stream, fcntl.LOCK_EX)
+    try:
+        inventory = json.loads(inventory_path.read_text())
+        if any(item.get("name") == name for item in inventory["datasets"]):
+            raise ValueError(f"dataset is already registered: {name}")
+        record = {"name": name, "source": str(source.resolve()), "destination": str(destination.resolve()), "files": files, "bytes": total_bytes, "verification": "rsync-checksum-dry-run"}
+        marker = ".rnnoise-finalize-verified.json"
+        if destination.exists():
+            marker_path = destination / marker
+            if not destination.is_dir() or not marker_path.is_file() or json.loads(marker_path.read_text()) != record:
+                raise FileExistsError(f"destination already exists: {destination}")
+            inventory["datasets"].append(record)
+            _json_write(inventory_path, inventory)
+            marker_path.unlink(missing_ok=True)
+            return record
+        if not temporary.is_dir():
+            raise FileNotFoundError(f"temporary copy does not exist: {temporary}")
+        _json_write(temporary / marker, record)
+        os.replace(temporary, destination)
         inventory["datasets"].append(record)
         _json_write(inventory_path, inventory)
-        marker_path.unlink(missing_ok=True)
+        (destination / marker).unlink(missing_ok=True)
         return record
-    if not temporary.is_dir():
-        raise FileNotFoundError(f"temporary copy does not exist: {temporary}")
-    _json_write(temporary / marker, record)
-    os.replace(temporary, destination)
-    inventory["datasets"].append(record)
-    _json_write(inventory_path, inventory)
-    (destination / marker).unlink(missing_ok=True)
-    return record
+    finally:
+        fcntl.flock(lock_stream, fcntl.LOCK_UN)
+        lock_stream.close()
 
 
 def eject_check(root: Path) -> dict[str, object]:
@@ -395,9 +414,13 @@ def eject_check(root: Path) -> dict[str, object]:
             raise RuntimeError(f"active experiment has no complete checkpoint: {experiment}")
         latest = checkpoints[-1]
         manifest = json.loads((latest / "manifest.json").read_text())
+        required = {"model.safetensors", "optimizer.safetensors", "mlx-random-state.safetensors", "trainer-state.json"}
+        files = manifest.get("files")
+        if manifest.get("format_version") != 1 or not isinstance(files, dict) or set(files) != required:
+            raise RuntimeError(f"active checkpoint manifest is incomplete: {latest}")
         corrupt = [
             name
-            for name, expected in manifest.get("files", {}).items()
+            for name, expected in files.items()
             if not (latest / name).is_file()
             or hashlib.sha256((latest / name).read_bytes()).hexdigest() != expected
         ]

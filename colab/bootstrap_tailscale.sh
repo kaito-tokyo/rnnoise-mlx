@@ -26,17 +26,18 @@ if ! pgrep -x tailscaled >/dev/null 2>&1; then
     --socks5-server=127.0.0.1:1055 \
     --outbound-http-proxy-listen=127.0.0.1:1055 \
     >/tmp/tailscaled.log 2>&1 &
-  for _ in $(seq 1 30); do
-    tailscale status >/dev/null 2>&1 || true
-    pgrep -x tailscaled >/dev/null 2>&1 && break
-    sleep 1
-  done
 fi
 
 pgrep -x tailscaled >/dev/null || {
   cat /tmp/tailscaled.log >&2 || true
   exit 1
 }
+
+for _ in $(seq 1 30); do
+  tailscale status >/dev/null 2>&1 && break
+  sleep 1
+done
+tailscale status >/dev/null
 
 tailscale up --auth-key="file:$key_file" --hostname="$TAILSCALE_HOSTNAME"
 

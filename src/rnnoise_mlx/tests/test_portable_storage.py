@@ -90,6 +90,18 @@ def test_verify_copy_detects_matching_and_different_trees(tmp_path):
         portable_storage.verify_copy(source, destination)
 
 
+def test_verify_copy_rejects_audit_record_inside_verified_tree(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    destination.mkdir()
+    (source / "file").write_bytes(b"same")
+    (destination / "file").write_bytes(b"same")
+
+    with pytest.raises(ValueError, match="outside"):
+        portable_storage.verify_copy(source, destination, source / "verification.json")
+
+
 def test_copy_tree_recovers_record_after_post_rename_interruption(tmp_path):
     source = tmp_path / "source"
     destination = tmp_path / "destination"
@@ -103,6 +115,15 @@ def test_copy_tree_recovers_record_after_post_rename_interruption(tmp_path):
 
     assert result["matched"]
     assert record.is_file()
+
+
+def test_copy_tree_rejects_destination_below_source(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "file").write_bytes(b"same")
+
+    with pytest.raises(ValueError, match="must not be inside"):
+        portable_storage.copy_tree(source, source / "copy", tmp_path / "copy.json")
 
 
 def test_sqlite_integrity_check(tmp_path):
@@ -159,6 +180,20 @@ def test_eject_check_rejects_live_training_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(portable_storage.os, "kill", lambda pid, signal: None)
 
     with pytest.raises(RuntimeError, match="training is still running"):
+        portable_storage.eject_check(root)
+
+
+def test_eject_check_rejects_incomplete_checkpoint_manifest(tmp_path, monkeypatch):
+    root = tmp_path
+    checkpoint = root / "experiments" / "active" / "trial" / "checkpoints" / "update-1"
+    checkpoint.mkdir(parents=True)
+    portable_storage._json_write(
+        checkpoint / "manifest.json", {"format_version": 1, "files": {}},
+    )
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {"volume_uuid": "id", "minimum_free_bytes": 0})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+
+    with pytest.raises(RuntimeError, match="manifest is incomplete"):
         portable_storage.eject_check(root)
 
 

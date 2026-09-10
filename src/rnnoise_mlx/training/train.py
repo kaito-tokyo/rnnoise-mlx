@@ -515,6 +515,9 @@ def main():
         tracker.pause(summary, output)
         return
 
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
     model.save(str(output / "model.safetensors"))
     trained_evaluation = evaluate(model, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
     reloaded = RNNoise.load(str(output / "model.safetensors"), config)

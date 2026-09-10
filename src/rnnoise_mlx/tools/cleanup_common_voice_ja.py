@@ -302,6 +302,8 @@ def main() -> None:
         parser.error("--noise-suppress-db must be zero or negative")
     if args.sample_rate < 1 or args.frame_ms < 1:
         parser.error("--sample-rate and --frame-ms must be positive")
+    if args.margin_ms < 0:
+        parser.error("--margin-ms must be nonnegative")
     if args.sample_rate * args.frame_ms % 1000:
         parser.error("--frame-ms must produce an integral sample count")
     if shutil.which("ffmpeg") is None:
