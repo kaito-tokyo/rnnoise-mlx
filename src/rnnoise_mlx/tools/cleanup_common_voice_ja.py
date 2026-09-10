@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import ctypes
 import ctypes.util
 import hashlib
@@ -28,6 +28,12 @@ def sha256(path: Path) -> str:
         while block := stream.read(1024 * 1024):
             digest.update(block)
     return digest.hexdigest()
+
+
+def json_write(path: Path, value: object) -> None:
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    os.replace(temporary, path)
 
 
 class Preprocessor(Protocol):
@@ -162,7 +168,7 @@ def encode_wav(pcm: bytes, output: Path, sample_rate: int) -> None:
 
 def cleanup_one(source_root: Path, output_root: Path, record: dict[str, Any],
                 processor_factory: Any, threshold: float, margin_samples: int,
-                sample_rate: int, frame_size: int) -> dict[str, Any]:
+                sample_rate: int, frame_size: int, *, reuse_existing: bool = True) -> dict[str, Any]:
     source_relative = Path(str(record["path"]))
     if source_relative.is_absolute() or ".." in source_relative.parts:
         raise ValueError(f"input path escapes the corpus root: {source_relative}")
@@ -174,6 +180,8 @@ def cleanup_one(source_root: Path, output_root: Path, record: dict[str, Any],
     onset = float(record["onsets_seconds"][f"{threshold:g}"])
     trim_samples = max(0, round(onset * sample_rate) - margin_samples)
     output.parent.mkdir(parents=True, exist_ok=True)
+    if output.is_file() and not reuse_existing:
+        output.unlink()
     if not output.is_file():
         temporary = output.with_name(output.stem + ".partial.wav")
         temporary.unlink(missing_ok=True)
@@ -276,20 +284,30 @@ def cleanup_contract(
 
 def validate_resume(
     output_root: Path, contract: dict[str, Any], source_root: Path, records: list[dict[str, Any]]
-) -> None:
-    """Reject partial or differently configured output before it is reused."""
+) -> set[str]:
+    """Verify completed files and return the inputs that can be reused."""
     manifest_path = output_root / "cleanup-manifest.json"
-    if not manifest_path.is_file():
-        raise ValueError("--resume requires a complete cleanup-manifest.json")
-    previous = json.loads(manifest_path.read_text())
+    progress_path = output_root / "cleanup-progress.json"
+    if manifest_path.is_file():
+        previous = json.loads(manifest_path.read_text())
+        complete = True
+    elif progress_path.is_file():
+        previous = json.loads(progress_path.read_text())
+        complete = False
+    else:
+        raise ValueError("--resume requires cleanup-manifest.json or cleanup-progress.json")
     mismatches = [key for key, value in contract.items() if previous.get(key) != value]
     if mismatches:
         raise ValueError("--resume cleanup configuration differs: " + ", ".join(mismatches))
     existing = {item.get("input"): item for item in previous.get("files", [])}
     expected = {Path(str(record["path"])).as_posix() for record in records}
-    if set(existing) != expected:
+    if not set(existing) <= expected:
+        raise ValueError("--resume accepted inputs differ from the completed output")
+    if complete and set(existing) != expected:
         raise ValueError("--resume accepted inputs differ from the completed output")
     for relative in sorted(expected):
+        if relative not in existing:
+            continue
         item = existing[relative]
         source = source_root / relative
         output = output_root / Path(relative).with_suffix(".wav")
@@ -300,6 +318,7 @@ def validate_resume(
             or item.get("output_sha256") != sha256(output)
         ):
             raise ValueError(f"--resume output verification failed: {relative}")
+    return set(existing)
 
 
 def main() -> None:
@@ -371,23 +390,46 @@ def main() -> None:
         noise_suppress_db=args.noise_suppress_db, threshold=args.threshold,
         margin_samples=margin_samples,
     )
+    reusable_inputs: set[str] = set()
     if output_root.exists() and args.resume:
         try:
-            validate_resume(output_root, contract, source_root, records)
+            reusable_inputs = validate_resume(output_root, contract, source_root, records)
         except (OSError, ValueError, json.JSONDecodeError) as error:
             parser.error(str(error))
     output_root.mkdir(parents=True, exist_ok=args.resume)
+    progress_path = output_root / "cleanup-progress.json"
+    operation_marker = output_root / ".cleanup.partial"
+    progress = {**contract, "files": []}
+    if progress_path.is_file():
+        progress = json.loads(progress_path.read_text())
+    else:
+        json_write(progress_path, progress)
+    json_write(operation_marker, {"operation": "cleanup", "progress": progress_path.name})
     factory = lambda: speex.create(frame_size, args.sample_rate, args.noise_suppress_db)
-    worker = lambda record: cleanup_one(
-        source_root, output_root, record, factory, args.threshold, margin_samples,
-        args.sample_rate, frame_size,
-    )
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        results = list(pool.map(worker, records))
+    def worker(record: dict[str, Any]) -> dict[str, Any]:
+        return cleanup_one(
+            source_root, output_root, record, factory, args.threshold, margin_samples,
+            args.sample_rate, frame_size,
+            reuse_existing=Path(str(record["path"])).as_posix() in reusable_inputs,
+        )
 
+    results_by_input: dict[str, dict[str, Any]] = {
+        item["input"]: item for item in progress.get("files", [])
+    }
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = [pool.submit(worker, record) for record in records]
+        for future in as_completed(futures):
+            result = future.result()
+            results_by_input[result["input"]] = result
+            progress = {**contract, "files": list(results_by_input.values())}
+            json_write(progress_path, progress)
+
+    results = [results_by_input[Path(str(record["path"])).as_posix()] for record in records]
     manifest = {**contract, "files": results}
     manifest_path = output_root / "cleanup-manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    json_write(manifest_path, manifest)
+    progress_path.unlink(missing_ok=True)
+    operation_marker.unlink(missing_ok=True)
     print(json.dumps({"cleaned_files": len(results), "output": str(output_root)}))
 
 

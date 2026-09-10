@@ -315,6 +315,36 @@ def test_eject_check_acquires_mlflow_startup_lock(tmp_path, monkeypatch):
     assert portable_storage.fcntl.LOCK_EX in calls
 
 
+def test_eject_check_acquires_the_root_training_guard(tmp_path, monkeypatch):
+    calls = []
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / ".copy.partial-1").mkdir()
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+    monkeypatch.setattr(
+        portable_storage.fcntl, "flock", lambda stream, operation: calls.append(stream.name)
+    )
+
+    with pytest.raises(RuntimeError, match="incomplete temporary"):
+        portable_storage.eject_check(tmp_path)
+
+    assert str(tmp_path / ".rnnoise-training.lock.guard") in calls
+
+
+def test_stop_mlflow_acquires_startup_lock(tmp_path, monkeypatch):
+    calls = []
+    (tmp_path / "runtime").mkdir()
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+    monkeypatch.setattr(portable_storage, "sqlite_integrity", lambda database: "ok")
+    monkeypatch.setattr(
+        portable_storage.fcntl, "flock", lambda stream, operation: calls.append(stream.name)
+    )
+
+    assert portable_storage.stop_mlflow(tmp_path) == "ok"
+    assert str(tmp_path / "runtime" / ".rnnoise-mlflow-start.lock") in calls
+
+
 def test_eject_check_rejects_live_training_lock(tmp_path, monkeypatch):
     root = tmp_path
     lock = root / "experiments" / "active" / "trial" / ".rnnoise-training.lock"

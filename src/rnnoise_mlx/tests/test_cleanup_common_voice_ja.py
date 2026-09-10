@@ -152,3 +152,31 @@ def test_resume_rejects_changed_input_or_incomplete_output(tmp_path: Path):
     source.write_bytes(b"changed")
     with pytest.raises(ValueError, match="verification failed"):
         validate_resume(output_root, contract, source_root, [record])
+
+
+def test_resume_accepts_verified_progress_from_an_interrupted_cleanup(tmp_path: Path):
+    source = tmp_path / "input" / "clip.mp3"
+    source.parent.mkdir()
+    source.write_bytes(b"source")
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    output = output_root / "clip.wav"
+    output.write_bytes(b"wave")
+    filter_manifest = tmp_path / "filter.json"
+    filter_manifest.write_text("{}")
+    library = tmp_path / "libspeexdsp.dylib"
+    library.write_bytes(b"library")
+    contract = cleanup_contract(
+        source.parent, filter_manifest, library, sample_rate=48_000, frame_size=960,
+        frame_ms=20, noise_suppress_db=-12, threshold=-40, margin_samples=7200,
+    )
+    record = {"path": "clip.mp3", "onsets_seconds": {"-40": 0}}
+    (output_root / "cleanup-progress.json").write_text(__import__("json").dumps({
+        **contract,
+        "files": [{
+            "input": "clip.mp3", "input_sha256": sha256(source),
+            "output": "clip.wav", "output_sha256": sha256(output),
+        }],
+    }))
+
+    assert validate_resume(output_root, contract, source.parent, [record]) == {"clip.mp3"}

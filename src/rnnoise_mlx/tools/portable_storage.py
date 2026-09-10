@@ -281,6 +281,14 @@ def sqlite_integrity(database: Path) -> str:
 
 def stop_mlflow(root: Path, timeout: float = 30.0) -> str:
     load_volume_config(root)
+    startup_lock = root / "runtime" / ".rnnoise-mlflow-start.lock"
+    startup_lock.parent.mkdir(parents=True, exist_ok=True)
+    with startup_lock.open("a+") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        return _stop_mlflow_locked(root, timeout)
+
+
+def _stop_mlflow_locked(root: Path, timeout: float) -> str:
     pid = _running_pid(root)
     if pid is not None:
         os.kill(pid, signal.SIGTERM)
@@ -439,10 +447,13 @@ def eject_check(root: Path) -> dict[str, object]:
     startup_lock.parent.mkdir(parents=True, exist_ok=True)
     with startup_lock.open("a+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
-        return _eject_check_locked(root)
+        training_guard = root / ".rnnoise-training.lock.guard"
+        with training_guard.open("a+") as training_stream:
+            fcntl.flock(training_stream, fcntl.LOCK_EX)
+            return _eject_check_locked(root, root_training_guard_held=True)
 
 
-def _eject_check_locked(root: Path) -> dict[str, object]:
+def _eject_check_locked(root: Path, *, root_training_guard_held: bool = False) -> dict[str, object]:
     config = load_volume_config(root)
     running = _running_pid(root)
     if running is not None:
@@ -456,18 +467,13 @@ def _eject_check_locked(root: Path) -> dict[str, object]:
         raise RuntimeError(f"incomplete temporary paths remain: {partials[:5]}")
     live_training = []
     for lock in root.rglob(".rnnoise-training.lock"):
+        if root_training_guard_held and lock.parent == root:
+            _inspect_training_lock(lock, live_training)
+            continue
         guard = lock.with_name(f"{lock.name}.guard")
         with guard.open("a+") as stream:
             fcntl.flock(stream, fcntl.LOCK_EX)
-            try:
-                metadata = json.loads(lock.read_text())
-                pid = int(metadata["pid"])
-                if not _training_lock_is_live(metadata):
-                    raise OSError
-            except (OSError, ValueError, KeyError, json.JSONDecodeError):
-                lock.unlink(missing_ok=True)
-            else:
-                live_training.append(f"{lock.parent} (PID {pid})")
+            _inspect_training_lock(lock, live_training)
     if live_training:
         raise RuntimeError(f"training is still running: {live_training[:5]}")
     active_checkpoints = []
@@ -502,6 +508,18 @@ def _eject_check_locked(root: Path) -> dict[str, object]:
         "minimum_free_bytes_met": free_bytes >= int(config["minimum_free_bytes"]),
         "active_checkpoints": active_checkpoints,
     }
+
+
+def _inspect_training_lock(lock: Path, live_training: list[str]) -> None:
+    try:
+        metadata = json.loads(lock.read_text())
+        pid = int(metadata["pid"])
+        if not _training_lock_is_live(metadata):
+            raise OSError
+    except (OSError, ValueError, KeyError, json.JSONDecodeError):
+        lock.unlink(missing_ok=True)
+    else:
+        live_training.append(f"{lock.parent} (PID {pid})")
 
 
 def display_result(result: object) -> object:

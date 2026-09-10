@@ -53,10 +53,20 @@ if (( create )); then
   trap cleanup_session EXIT
 fi
 
+known_hosts_dir="$HOME/.cache/rnnoise/colab-known-hosts"
+mkdir -p -m 700 "$known_hosts_dir"
+known_hosts="$known_hosts_dir/$session"
+# A newly created Colab runtime is expected to have a new host key, even when
+# its session name was used before. Reused sessions retain their prior key.
+if (( create )); then
+  rm -f -- "$known_hosts"
+fi
 proxy_command="colab ssh --proxy-mode --session $(printf '%q' "$session") --identity $(printf '%q' "$identity")"
 ssh_args=(
   -i "$identity"
   -o "ProxyCommand=$proxy_command"
+  -o "UserKnownHostsFile=$known_hosts"
+  -o "HostKeyAlias=colab-$session"
   -o StrictHostKeyChecking=accept-new
   root@colab-runtime
 )
