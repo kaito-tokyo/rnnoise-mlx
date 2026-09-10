@@ -194,11 +194,12 @@ def start_mlflow(root: Path, port: int = 5000, timeout: float = 30.0) -> int:
         artifacts.as_uri(),
         "--serve-artifacts",
     ]
-    process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    _json_write(_pid_path(root), {"pid": process.pid, "database": str(database.resolve())})
-    deadline = time.monotonic() + timeout
-    health = f"http://127.0.0.1:{port}/health"
+    process = None
     try:
+        process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        _json_write(_pid_path(root), {"pid": process.pid, "database": str(database.resolve())})
+        deadline = time.monotonic() + timeout
+        health = f"http://127.0.0.1:{port}/health"
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 raise RuntimeError(f"MLflow exited with status {process.returncode}; see {log_path}")
@@ -210,7 +211,7 @@ def start_mlflow(root: Path, port: int = 5000, timeout: float = 30.0) -> int:
                 time.sleep(0.25)
         raise TimeoutError(f"MLflow did not become healthy: {health}")
     except BaseException:
-        if process.poll() is None:
+        if process is not None and process.poll() is None:
             process.terminate()
         _pid_path(root).unlink(missing_ok=True)
         raise
@@ -291,6 +292,10 @@ def verify_copy(source: Path, destination: Path, record: Path | None = None) -> 
 
 
 def copy_tree(source: Path, destination: Path, record: Path) -> dict[str, object]:
+    source = source.resolve()
+    destination = destination.resolve()
+    if source == destination or source in destination.parents:
+        raise ValueError("copy destination must not be inside the source")
     if destination.exists():
         if record.exists():
             raise FileExistsError(f"destination already exists: {destination}")
@@ -332,26 +337,23 @@ def finalize_verified_copy(
     inventory = json.loads(inventory_path.read_text())
     if any(item.get("name") == name for item in inventory["datasets"]):
         raise ValueError(f"dataset is already registered: {name}")
+    record = {"name": name, "source": str(source.resolve()), "destination": str(destination.resolve()), "files": files, "bytes": total_bytes, "verification": "rsync-checksum-dry-run"}
+    marker = ".rnnoise-finalize-verified.json"
     if destination.exists():
-        if not destination.is_dir():
+        marker_path = destination / marker
+        if not destination.is_dir() or not marker_path.is_file() or json.loads(marker_path.read_text()) != record:
             raise FileExistsError(f"destination already exists: {destination}")
-        record = {"name": name, "source": str(source.resolve()), "destination": str(destination.resolve()), "files": files, "bytes": total_bytes, "verification": "rsync-checksum-dry-run"}
         inventory["datasets"].append(record)
         _json_write(inventory_path, inventory)
+        marker_path.unlink(missing_ok=True)
         return record
     if not temporary.is_dir():
         raise FileNotFoundError(f"temporary copy does not exist: {temporary}")
+    _json_write(temporary / marker, record)
     os.replace(temporary, destination)
-    record = {
-        "name": name,
-        "source": str(source.resolve()),
-        "destination": str(destination.resolve()),
-        "files": files,
-        "bytes": total_bytes,
-        "verification": "rsync-checksum-dry-run",
-    }
     inventory["datasets"].append(record)
     _json_write(inventory_path, inventory)
+    (destination / marker).unlink(missing_ok=True)
     return record
 
 

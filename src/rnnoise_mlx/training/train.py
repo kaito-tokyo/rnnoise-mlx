@@ -55,6 +55,7 @@ def _register_training_lock(output: Path) -> None:
     if root not in output.parents:
         return
     lock = output / ".rnnoise-training.lock"
+    # Create exclusively so concurrent trainers cannot both claim this output.
     if lock.exists():
         try:
             previous = json.loads(lock.read_text())
@@ -63,7 +64,11 @@ def _register_training_lock(output: Path) -> None:
             lock.unlink(missing_ok=True)
         else:
             raise RuntimeError(f"training output is already active: {output}")
-    lock.write_text(json.dumps({"pid": os.getpid()}) + "\n")
+    try:
+        with lock.open("x") as stream:
+            stream.write(json.dumps({"pid": os.getpid()}) + "\n")
+    except FileExistsError:
+        raise RuntimeError(f"training output is already active: {output}") from None
     atexit.register(lock.unlink, missing_ok=True)
 
 
