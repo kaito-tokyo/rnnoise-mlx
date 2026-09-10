@@ -473,6 +473,18 @@ def main():
     mx.eval(model.state, optimizer.state)
 
     training_elapsed = elapsed_before_resume + time.monotonic() - started
+    if stop_requested:
+        summary = {
+            "updates": update,
+            "stop_requested": True,
+            "training_seconds": training_elapsed,
+            "processed_frames": processed_frames,
+            "history": history,
+        }
+        (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
+        tracker.pause(summary, output)
+        return
+
     model.save(str(output / "model.safetensors"))
     trained_evaluation = evaluate(model, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
     reloaded = RNNoise.load(str(output / "model.safetensors"), config)

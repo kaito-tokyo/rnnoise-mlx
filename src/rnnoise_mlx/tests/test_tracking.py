@@ -80,6 +80,29 @@ def test_tracker_reuses_existing_run_and_retains_name(tmp_path, monkeypatch):
     ) in calls
 
 
+def test_pause_marks_run_killed_with_resumable_state(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(tracking.mlflow, "set_tags", lambda tags: calls.append(("set_tags", tags)))
+    monkeypatch.setattr(
+        tracking.mlflow,
+        "log_artifact",
+        lambda local, artifact_path: calls.append(("log_artifact", local, artifact_path)),
+    )
+    monkeypatch.setattr(
+        tracking.mlflow,
+        "end_run",
+        lambda **kwargs: calls.append(("end_run", kwargs)),
+    )
+    tracker = object.__new__(tracking.MLflowTracker)
+    tracker.closed = False
+
+    tracker.pause({}, tmp_path)
+
+    assert ("set_tags", {"logical_status": "paused", "stop_requested": "true"}) in calls
+    assert ("end_run", {"status": "KILLED"}) in calls
+    assert tracker.closed
+
+
 def test_resumed_run_config_uses_update_namespace(tmp_path, monkeypatch):
     calls = _mock_mlflow(monkeypatch)
     tracking.MLflowTracker(

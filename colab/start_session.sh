@@ -50,15 +50,26 @@ ssh_args=(
   root@colab-runtime
 )
 
-# Auth key contents travel only through the encrypted SSH stream and exist in
-# Colab tmpfs until bootstrap_tailscale.sh consumes them.
-cat "$auth_key_file" | ssh "${ssh_args[@]}" \
-  'umask 077; cat > /dev/shm/.tailscale-authkey; chmod 600 /dev/shm/.tailscale-authkey'
-
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 remote_env="MLFLOW_TRACKING_URI=$(printf '%q' "$mlflow_uri") TAILSCALE_HOSTNAME=$(printf '%q' "colab-$session")"
-ssh "${ssh_args[@]}" "$remote_env bash -s" \
-  < "$script_dir/bootstrap_tailscale.sh"
+# Send the key and bootstrap script through one SSH stream. The remote command
+# reads the byte-counted key first, then gives the remaining stream to bash.
+# Its trap also covers a bootstrap failure before bootstrap_tailscale.sh starts.
+key_bytes=$(wc -c < "$auth_key_file")
+remote_command='read -r key_bytes
+case "$key_bytes" in (*[!0-9]*|"") exit 2;; esac
+umask 077
+key_file=/dev/shm/.tailscale-authkey
+cleanup_key() { rm -f -- "$key_file"; }
+trap cleanup_key EXIT HUP INT TERM
+dd bs=1 count="$key_bytes" of="$key_file" status=none
+chmod 600 "$key_file"
+bash'
+{
+  printf '%s\n' "$key_bytes"
+  cat "$auth_key_file"
+  cat "$script_dir/bootstrap_tailscale.sh"
+} | ssh "${ssh_args[@]}" "$remote_env bash -c $(printf '%q' "$remote_command")"
 
 cat <<EOF
 

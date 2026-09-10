@@ -249,6 +249,13 @@ class MLflowTracker:
         mlflow.end_run(status="FINISHED")
         self.closed = True
 
+    def pause(self, summary: dict[str, Any], output: Path) -> None:
+        """Record a resumable stop without representing it as completion."""
+        mlflow.set_tags({"logical_status": "paused", "stop_requested": "true"})
+        mlflow.log_artifact(str(output / "training.json"), artifact_path="model")
+        mlflow.end_run(status="KILLED")
+        self.closed = True
+
     def fail_if_open(self) -> None:
         if not self.closed:
             mlflow.end_run(status="FAILED")
