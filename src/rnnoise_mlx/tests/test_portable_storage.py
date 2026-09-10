@@ -301,6 +301,20 @@ def test_eject_check_scans_temporary_paths_outside_dataset_roots(tmp_path, monke
         portable_storage.eject_check(tmp_path)
 
 
+def test_eject_check_acquires_mlflow_startup_lock(tmp_path, monkeypatch):
+    calls = []
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / ".copy.partial-1").mkdir()
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+    monkeypatch.setattr(portable_storage.fcntl, "flock", lambda stream, operation: calls.append(operation))
+
+    with pytest.raises(RuntimeError, match="incomplete temporary"):
+        portable_storage.eject_check(tmp_path)
+
+    assert portable_storage.fcntl.LOCK_EX in calls
+
+
 def test_eject_check_rejects_live_training_lock(tmp_path, monkeypatch):
     root = tmp_path
     lock = root / "experiments" / "active" / "trial" / ".rnnoise-training.lock"

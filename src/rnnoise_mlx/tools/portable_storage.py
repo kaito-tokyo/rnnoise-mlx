@@ -434,6 +434,15 @@ def _is_temporary_path(path: Path) -> bool:
 
 
 def eject_check(root: Path) -> dict[str, object]:
+    load_volume_config(root)
+    startup_lock = root / "runtime" / ".rnnoise-mlflow-start.lock"
+    startup_lock.parent.mkdir(parents=True, exist_ok=True)
+    with startup_lock.open("a+") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        return _eject_check_locked(root)
+
+
+def _eject_check_locked(root: Path) -> dict[str, object]:
     config = load_volume_config(root)
     running = _running_pid(root)
     if running is not None:
