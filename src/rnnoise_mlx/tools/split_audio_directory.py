@@ -42,7 +42,7 @@ def _split_locked(
 ) -> dict[str, object]:
     if not paths:
         raise ValueError(f"no audio files in {source}")
-    output.mkdir(parents=True, exist_ok=True)
+    output.mkdir(parents=True, exist_ok=False)
     records = []
     counts = {"train": 0, "eval": 0}
     for path in paths:

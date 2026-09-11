@@ -17,7 +17,6 @@ def test_split_creates_symlinks_and_manifest(tmp_path: Path):
     for index in range(20):
         (source / f"{index}.flac").write_bytes(b"audio")
     output = tmp_path / "split"
-    output.mkdir()
     manifest = split(source, output, 0.5, 141)
     assert sum(manifest["counts"].values()) == 20
     assert manifest["counts"]["train"] > 0
@@ -38,7 +37,6 @@ def test_split_resolves_symlinked_output_parent(tmp_path: Path):
     linked_parent = tmp_path / "data"
     linked_parent.symlink_to(physical_parent, target_is_directory=True)
     output = linked_parent / "split"
-    output.mkdir()
 
     split(source, output, 0.5, 141)
 
