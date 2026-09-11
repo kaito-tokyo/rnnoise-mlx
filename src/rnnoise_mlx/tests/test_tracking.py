@@ -80,6 +80,57 @@ def test_tracker_reuses_existing_run_and_retains_name(tmp_path, monkeypatch):
     ) in calls
 
 
+def test_new_run_starts_with_active_logical_status(tmp_path, monkeypatch):
+    calls = _mock_mlflow(monkeypatch)
+    monkeypatch.setattr(tracking.mlflow, "set_experiment", lambda name: None)
+
+    tracking.MLflowTracker(
+        "http://mlflow.test", "rnnoise-mlx", "new", None, tmp_path, {"batch_size": 8}
+    )
+
+    start = next(value for name, value in calls if name == "start_run")
+    assert start["tags"]["logical_status"] == "active"
+    assert start["tags"]["stop_requested"] == "false"
+
+
+def test_pause_marks_run_killed_with_resumable_state(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(tracking.mlflow, "set_tags", lambda tags: calls.append(("set_tags", tags)))
+    monkeypatch.setattr(
+        tracking.mlflow,
+        "log_artifact",
+        lambda local, artifact_path: calls.append(("log_artifact", local, artifact_path)),
+    )
+    monkeypatch.setattr(
+        tracking.mlflow,
+        "end_run",
+        lambda **kwargs: calls.append(("end_run", kwargs)),
+    )
+    tracker = object.__new__(tracking.MLflowTracker)
+    tracker.closed = False
+
+    tracker.pause({}, tmp_path)
+
+    assert ("set_tags", {"logical_status": "paused", "stop_requested": "true"}) in calls
+    assert ("end_run", {"status": "KILLED"}) in calls
+    assert tracker.closed
+
+
+def test_failure_marks_logical_status_failed(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tracking.mlflow, "set_tags", lambda tags: calls.append(("set_tags", tags)))
+    monkeypatch.setattr(
+        tracking.mlflow, "end_run", lambda **kwargs: calls.append(("end_run", kwargs))
+    )
+    tracker = object.__new__(tracking.MLflowTracker)
+    tracker.closed = False
+
+    tracker.fail_if_open()
+
+    assert ("set_tags", {"logical_status": "failed", "stop_requested": "false"}) in calls
+    assert ("end_run", {"status": "FAILED"}) in calls
+
+
 def test_resumed_run_config_uses_update_namespace(tmp_path, monkeypatch):
     calls = _mock_mlflow(monkeypatch)
     tracking.MLflowTracker(
@@ -106,6 +157,35 @@ def test_validate_tracking_target_does_not_start_or_update_run(monkeypatch):
 
     assert existing.info.run_id == "run-123"
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "tracking_uri",
+    ["./mlruns", "file:///tmp/mlruns", "sqlite:///tmp/mlflow.db"],
+)
+def test_validate_tracking_target_rejects_local_store(tracking_uri, monkeypatch):
+    monkeypatch.setattr(
+        tracking.mlflow,
+        "set_tracking_uri",
+        lambda uri: pytest.fail("direct local tracking URI must be rejected before use"),
+    )
+
+    with pytest.raises(ValueError, match="direct local file and SQLite tracking"):
+        tracking.validate_tracking_target(tracking_uri, "rnnoise-mlx")
+
+
+def test_validate_tracking_target_aborts_when_server_is_unavailable(monkeypatch):
+    class UnavailableClient:
+        def search_experiments(self, max_results):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(tracking, "MlflowClient", UnavailableClient)
+    monkeypatch.setattr(tracking.mlflow, "set_tracking_uri", lambda uri: None)
+
+    with pytest.raises(
+        ConnectionError, match="training aborted without tracking-store fallback"
+    ):
+        tracking.validate_tracking_target("http://mlflow.test", "rnnoise-mlx")
 
 
 def test_tracker_rejects_run_from_another_experiment(tmp_path, monkeypatch):
