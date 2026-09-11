@@ -150,9 +150,11 @@ def test_resume_rejects_changed_input_or_incomplete_output(tmp_path: Path):
     filter_manifest.write_text("{}")
     library = tmp_path / "libspeexdsp.dylib"
     library.write_bytes(b"library")
+    ffmpeg = tmp_path / "ffmpeg"
+    ffmpeg.write_bytes(b"ffmpeg")
     record = {"path": "clip.mp3", "onsets_seconds": {"-40": 0}}
     contract = cleanup_contract(
-        source_root, filter_manifest, library, sample_rate=48_000, frame_size=960,
+        source_root, filter_manifest, library, ffmpeg, sample_rate=48_000, frame_size=960,
         frame_ms=20, noise_suppress_db=-12, threshold=-40, margin_samples=7200,
     )
     output = output_root / "clip.wav"
@@ -171,6 +173,38 @@ def test_resume_rejects_changed_input_or_incomplete_output(tmp_path: Path):
         validate_resume(output_root, contract, source_root, [record])
 
 
+def test_resume_rejects_symlinked_output(tmp_path: Path):
+    source_root = tmp_path / "input"
+    source = source_root / "clip.mp3"
+    source.parent.mkdir()
+    source.write_bytes(b"source")
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    external = tmp_path / "external.wav"
+    external.write_bytes(b"wave")
+    (output_root / "clip.wav").symlink_to(external)
+    filter_manifest = tmp_path / "filter.json"
+    filter_manifest.write_text("{}")
+    library = tmp_path / "libspeexdsp.dylib"
+    library.write_bytes(b"library")
+    ffmpeg = tmp_path / "ffmpeg"
+    ffmpeg.write_bytes(b"ffmpeg")
+    contract = cleanup_contract(
+        source_root, filter_manifest, library, ffmpeg, sample_rate=48_000, frame_size=960,
+        frame_ms=20, noise_suppress_db=-12, threshold=-40, margin_samples=7200,
+    )
+    (output_root / "cleanup-manifest.json").write_text(__import__("json").dumps({
+        **contract,
+        "files": [{
+            "input": "clip.mp3", "input_sha256": sha256(source),
+            "output": "clip.wav", "output_sha256": sha256(external),
+        }],
+    }))
+
+    with pytest.raises(ValueError, match="verification failed"):
+        validate_resume(output_root, contract, source_root, [{"path": "clip.mp3"}])
+
+
 def test_resume_accepts_verified_progress_from_an_interrupted_cleanup(tmp_path: Path):
     source = tmp_path / "input" / "clip.mp3"
     source.parent.mkdir()
@@ -183,8 +217,10 @@ def test_resume_accepts_verified_progress_from_an_interrupted_cleanup(tmp_path: 
     filter_manifest.write_text("{}")
     library = tmp_path / "libspeexdsp.dylib"
     library.write_bytes(b"library")
+    ffmpeg = tmp_path / "ffmpeg"
+    ffmpeg.write_bytes(b"ffmpeg")
     contract = cleanup_contract(
-        source.parent, filter_manifest, library, sample_rate=48_000, frame_size=960,
+        source.parent, filter_manifest, library, ffmpeg, sample_rate=48_000, frame_size=960,
         frame_ms=20, noise_suppress_db=-12, threshold=-40, margin_samples=7200,
     )
     record = {"path": "clip.mp3", "onsets_seconds": {"-40": 0}}

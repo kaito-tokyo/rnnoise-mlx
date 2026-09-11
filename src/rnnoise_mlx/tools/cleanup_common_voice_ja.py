@@ -268,6 +268,7 @@ def cleanup_contract(
     source_root: Path,
     filter_manifest: Path,
     library_path: Path,
+    ffmpeg_path: Path,
     *,
     sample_rate: int,
     frame_size: int,
@@ -285,6 +286,8 @@ def cleanup_contract(
         "filter_manifest_sha256": sha256(filter_manifest),
         "speex_library": str(library_path),
         "speex_library_sha256": sha256(library_path),
+        "ffmpeg": str(ffmpeg_path),
+        "ffmpeg_sha256": sha256(ffmpeg_path),
         "sample_rate_hz": sample_rate,
         "frame_size_samples": frame_size,
         "frame_ms": frame_ms,
@@ -328,7 +331,9 @@ def validate_resume(
         source = source_root / relative
         output = output_root / Path(relative).with_suffix(".wav")
         if (
-            not output.is_file()
+            output.is_symlink()
+            or not output.is_file()
+            or output_root.resolve() not in output.resolve().parents
             or item.get("input_sha256") != sha256(source)
             or item.get("output") != output.relative_to(output_root).as_posix()
             or item.get("output_sha256") != sha256(output)
@@ -376,8 +381,10 @@ def main() -> None:
         parser.error("--margin-ms must be nonnegative")
     if args.sample_rate * args.frame_ms % 1000:
         parser.error("--frame-ms must produce an integral sample count")
-    if shutil.which("ffmpeg") is None:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
         parser.error("ffmpeg is required")
+    ffmpeg_path = Path(ffmpeg).resolve()
     if output_root.exists() and not args.resume:
         parser.error(f"output already exists: {output_root}")
 
@@ -392,7 +399,7 @@ def main() -> None:
 
     portable_root = registered_volume_for_paths(
         [
-            source_root, output_root, filter_manifest, library_path,
+            source_root, output_root, filter_manifest, library_path, ffmpeg_path,
             *((source_root / str(record["path"])).resolve() for record in records),
         ]
     )
@@ -406,7 +413,7 @@ def main() -> None:
             frame_size = args.sample_rate * args.frame_ms // 1000
             margin_samples = round(args.margin_ms * args.sample_rate / 1000)
             contract = cleanup_contract(
-                source_root, filter_manifest, library_path,
+                source_root, filter_manifest, library_path, ffmpeg_path,
                 sample_rate=args.sample_rate, frame_size=frame_size, frame_ms=args.frame_ms,
                 noise_suppress_db=args.noise_suppress_db, threshold=args.threshold,
                 margin_samples=margin_samples,

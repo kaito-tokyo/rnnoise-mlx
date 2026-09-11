@@ -526,6 +526,7 @@ def main():
 
     for epoch in range(resume_epoch, args.epochs + 1):
         stop_checkpoint_committed = False
+        last_batch_checkpoint_committed = False
         first_batch = resume_batch if epoch == resume_epoch else 0
         batch_index = first_batch
         for features, gain, vad in batches_for_epoch(epoch, first_batch):
@@ -600,6 +601,7 @@ def main():
                 commit_checkpoint(next_epoch, next_batch)
                 checkpoint_due = False
                 checkpoint_committed = True
+            last_batch_checkpoint_committed = checkpoint_committed
             if stop_requested:
                 if not checkpoint_committed:
                     next_epoch = epoch
@@ -613,7 +615,7 @@ def main():
             if args.max_updates is not None and update >= args.max_updates:
                 break
         if stop_requested:
-            if not stop_checkpoint_committed:
+            if not stop_checkpoint_committed and not last_batch_checkpoint_committed:
                 commit_checkpoint(epoch + 1, 0)
             break
         if args.max_updates is not None and update >= args.max_updates:

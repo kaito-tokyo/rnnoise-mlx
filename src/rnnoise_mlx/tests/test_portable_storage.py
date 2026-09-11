@@ -527,6 +527,34 @@ def test_eject_check_rejects_symlinked_checkpoint_manifest(tmp_path, monkeypatch
         portable_storage.eject_check(root)
 
 
+def test_eject_check_rejects_symlinked_checkpoint_directory(tmp_path, monkeypatch):
+    root = tmp_path
+    checkpoints = root / "experiments" / "active" / "trial" / "checkpoints"
+    checkpoints.mkdir(parents=True)
+    external = tmp_path / "external-checkpoint"
+    external.mkdir()
+    (checkpoints / "update-1").symlink_to(external, target_is_directory=True)
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {"volume_uuid": "id", "minimum_free_bytes": 0})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+
+    with pytest.raises(RuntimeError, match="checkpoint is a symlink"):
+        portable_storage.eject_check(root)
+
+
+def test_eject_check_removes_malformed_training_lock(tmp_path, monkeypatch):
+    root = tmp_path
+    (root / "experiments" / "active").mkdir(parents=True)
+    lock = root / ".rnnoise-training.lock"
+    portable_storage._json_write(lock, {"pid": None})
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {"volume_uuid": "id", "minimum_free_bytes": 0})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+    monkeypatch.setattr(portable_storage, "sqlite_integrity", lambda database: "ok")
+
+    portable_storage.eject_check(root)
+
+    assert not lock.exists()
+
+
 def test_finalize_verified_copy_renames_and_registers(tmp_path, monkeypatch):
     root = tmp_path
     temporary = root / "datasets" / ".source.partial"

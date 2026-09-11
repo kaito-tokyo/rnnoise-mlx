@@ -589,6 +589,8 @@ def _eject_check_locked(root: Path, *, root_training_guard_held: bool = False) -
         if not checkpoints:
             raise RuntimeError(f"active experiment has no complete checkpoint: {experiment}")
         latest = checkpoints[-1]
+        if latest.is_symlink():
+            raise RuntimeError(f"active checkpoint is a symlink: {latest}")
         manifest_path = latest / "manifest.json"
         if manifest_path.is_symlink():
             raise RuntimeError(f"active checkpoint manifest is a symlink: {manifest_path}")
@@ -625,7 +627,7 @@ def _inspect_training_lock(lock: Path, live_training: list[str]) -> None:
         pid = int(metadata["pid"])
         if not _training_lock_is_live(metadata):
             raise OSError
-    except (OSError, ValueError, KeyError, json.JSONDecodeError):
+    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError):
         lock.unlink(missing_ok=True)
     else:
         live_training.append(f"{lock.parent} (PID {pid})")
