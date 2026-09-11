@@ -6,6 +6,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -30,7 +31,7 @@ def clean_one(
     if not output.is_file():
         # AVAudioFile selects the container from the final extension, so keep
         # `.wav` while still making the file visibly transactional.
-        temporary = output.with_name(output.stem + ".partial.wav")
+        temporary = output.with_name(f".{output.stem}.partial-{os.getpid()}.wav")
         temporary.unlink(missing_ok=True)
         try:
             subprocess.run(

@@ -29,6 +29,10 @@ def sha256(path: Path) -> str:
 
 def verify_checkpoint(path: Path, update: int) -> str:
     """Validate the complete allowlisted payload before it can be published."""
+    actual = {entry.name for entry in path.iterdir()}
+    required = FILES | {"manifest.json"}
+    if actual not in (required, required | {COMPLETE}):
+        raise ValueError("checkpoint contains undeclared files")
     manifest_path = path / "manifest.json"
     if manifest_path.is_symlink():
         raise ValueError("checkpoint manifest must not be a symlink")

@@ -6,6 +6,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -27,7 +28,7 @@ def trim_one(source_root: Path, output_root: Path, record: dict[str, object],
     trim_samples = max(0, round(onset * sample_rate) - margin_samples)
     output.parent.mkdir(parents=True, exist_ok=True)
     if not output.is_file():
-        temporary = output.with_name(output.stem + ".partial.wav")
+        temporary = output.with_name(f".{output.stem}.partial-{os.getpid()}.wav")
         temporary.unlink(missing_ok=True)
         try:
             subprocess.run([

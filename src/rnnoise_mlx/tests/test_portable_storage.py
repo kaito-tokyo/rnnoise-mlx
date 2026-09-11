@@ -331,11 +331,12 @@ def test_start_mlflow_waits_for_failed_process_before_removing_pid(tmp_path, mon
 
 
 def test_temporary_path_detection_does_not_match_ordinary_partial_names():
-    assert portable_storage._is_temporary_path(Path("clip.partial.wav"))
+    assert portable_storage._is_temporary_path(Path(".clip.partial-1.wav"))
     assert portable_storage._is_temporary_path(Path(".copy.partial-1"))
     assert portable_storage._is_temporary_path(Path(".record.tmp-1"))
     assert portable_storage._is_temporary_path(Path(".checkpoint-download.tmp-1"))
     assert portable_storage._is_temporary_path(Path("archive.part"))
+    assert not portable_storage._is_temporary_path(Path("clip.partial.wav"))
     assert not portable_storage._is_temporary_path(Path("partial_speech.wav"))
 
 

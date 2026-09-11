@@ -25,6 +25,7 @@ def test_clean_one_is_atomic_and_resumable(tmp_path: Path, monkeypatch):
     second = clean_one(executable, model, source_root, output_root, source)
     assert first == second
     assert len(calls) == 1
-    assert calls[0][-1].endswith(".partial.wav")
+    assert Path(calls[0][-1]).name.startswith(".clip.partial-")
+    assert calls[0][-1].endswith(".wav")
     assert (output_root / "speaker/clip.wav").read_bytes() == b"wave"
     assert not list(output_root.rglob("*.partial"))

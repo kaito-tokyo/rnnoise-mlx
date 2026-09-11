@@ -385,6 +385,10 @@ def verify_copy(source: Path, destination: Path, record: Path | None = None) -> 
 
 
 def _verify_copy_locked(source: Path, destination: Path, record: Path | None = None) -> dict[str, object]:
+    source = source.resolve()
+    destination = destination.resolve()
+    if source == destination:
+        raise ValueError("source and destination must differ")
     if not source.is_dir() or not destination.is_dir():
         raise FileNotFoundError("source and destination must both be directories")
     if record is not None:
@@ -518,7 +522,7 @@ def _finalize_verified_copy_locked(
 def _is_temporary_path(path: Path) -> bool:
     name = path.name
     return (
-        name.endswith((".partial", ".partial.wav", ".part"))
+        name.endswith((".partial", ".part"))
         or (name.startswith(".") and (".partial-" in name or ".tmp-" in name))
     )
 

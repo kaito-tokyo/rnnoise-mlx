@@ -198,7 +198,7 @@ def cleanup_one(source_root: Path, output_root: Path, record: dict[str, Any],
     if output.is_file() and not reuse_existing:
         output.unlink()
     if not output.is_file():
-        temporary = output.with_name(output.stem + ".partial.wav")
+        temporary = output.with_name(f".{output.stem}.partial-{os.getpid()}.wav")
         temporary.unlink(missing_ok=True)
         processor = processor_factory()
         try:
