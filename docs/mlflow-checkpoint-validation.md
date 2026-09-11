@@ -18,7 +18,7 @@ recover a previously committed generation. No retention deletion is implemented.
 - Source base: `5deae8846da5d1fb2b1900ea841e8eda077a3d12`, with uncommitted changes.
 - Colab: NVIDIA L4, 23,034 MiB, driver 580.82.07.
 - Isolated environment: Python 3.13.15, MLX CUDA 0.32.2, MLflow 3.14.0.
-- Windows artifact server: `prodesk-400-g4-dm`, MLflow 3.14.0 behind Tailscale Serve.
+- Windows artifact server: MLflow 3.14.0 at `http://localhost:5000` through WSL mirror mode.
 - Synthetic input: 64 training and 16 evaluation sequences, 16 frames per
   sequence; batch size 2, seed 17, no compile, no prefetch, synchronous evaluation.
 - The CUDA environment uses explicit dependencies and `PYTHONPATH`; this is not

@@ -1,56 +1,41 @@
 # Colab helpers
 
-These scripts connect an ephemeral **Colab** runtime to MLflow on **Windows**
-through Tailscale. They are run from **WSL**, where the Colab CLI OAuth state,
-the dedicated SSH key, and the Tailscale auth key are kept locally.
+These helpers run an ephemeral Colab GPU runtime from WSL. WSL is configured
+in mirror mode, so the remote training process uses the Windows MLflow server
+at `http://localhost:5000`.
 
-`start_session.sh` performs the setup that is otherwise easy to repeat
-incorrectly:
+`start_session.sh`:
 
 1. creates a Colab runtime;
-2. transfers the auth key over the SSH stream into Colab tmpfs;
-3. starts Tailscale in userspace networking mode; and
-4. checks the Windows MLflow `/health` endpoint through Tailscale Serve.
+2. creates an SSH reverse forward from Colab `localhost:5000` to WSL
+   `127.0.0.1:5000`; and
+3. checks the forwarded MLflow `/health` endpoint.
 
-For example, from the repository root in WSL:
+Example:
 
 ```sh
 ./colab/start_session.sh \
   --auth adc \
   --session rnnoise-smoke \
-  --gpu L4 \
-  --mlflow-uri 'https://YOUR-WINDOWS-HOST.tailnet.ts.net/'
+  --gpu L4
 ```
 
-The key defaults to
-`~/.config/rnnoise/tailscale-colab-authkey`; override it with
-`--auth-key-file` when needed. It must be a restricted reusable, ephemeral,
-pre-approved key for `tag:colab`. The key, OAuth token, and SSH private key are
-machine-local secrets and must never be committed.
+The default MLflow URI is `http://localhost:5000`. The helper keeps the SSH
+reverse forward alive for the lifetime of the Colab session, so remote training
+processes can use that URI without a separate network service.
 
 The helper uses the Colab CLI `adc` authentication strategy by default. Set up
-ADC once with `gcloud auth application-default login`. Use `--auth oauth2` to
-select the Colab CLI's direct OAuth flow instead.
-
-Colab lacks the TUN device needed for kernel networking. Consequently,
-Tailscale runs in userspace mode and MLflow clients must use its local HTTP
-proxy:
+ADC once with:
 
 ```sh
-export HTTP_PROXY=http://127.0.0.1:1055
-export HTTPS_PROXY=http://127.0.0.1:1055
+gcloud auth application-default login
 ```
 
-Set those variables in the remote training process before passing the HTTPS
-MLflow tracking URI. They are not needed by Windows or WSL when each accesses
-its local MLflow endpoint.
+Use `--auth oauth2` to select the Colab CLI's direct OAuth flow instead. The
+SSH private key is machine-local and must not be committed.
 
 When the workload has stopped, release the Colab runtime:
 
 ```sh
-colab stop --session rnnoise-smoke
+colab --auth adc stop --session rnnoise-smoke
 ```
-
-If a runtime must be released urgently, first run `tailscale logout` through
-the SSH connection, then stop the session. Ephemeral Tailscale nodes also age
-out after the runtime disappears.
