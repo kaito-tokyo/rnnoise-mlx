@@ -9,6 +9,7 @@ from rnnoise_mlx.tools.cleanup_common_voice_ja import (
     require_internal_output,
     sha256,
     validate_input_digests,
+    validate_output_path,
     validate_records,
     validate_resume,
 )
@@ -25,6 +26,17 @@ class FakePreprocessor:
 
     def close(self) -> None:
         self.closed = True
+
+
+def test_validate_output_path_rejects_symlinked_parent(tmp_path: Path):
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    (output_root / "speaker").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="parent must not be a symlink"):
+        validate_output_path(output_root, Path("speaker/clip.wav"))
 
 
 def test_denoise_pcm_pads_final_frame_and_restores_length():
@@ -201,7 +213,7 @@ def test_resume_rejects_symlinked_output(tmp_path: Path):
         }],
     }))
 
-    with pytest.raises(ValueError, match="verification failed"):
+    with pytest.raises(ValueError, match="must not be a symlink"):
         validate_resume(output_root, contract, source_root, [{"path": "clip.mp3"}])
 
 

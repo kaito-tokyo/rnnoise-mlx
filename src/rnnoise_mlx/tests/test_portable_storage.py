@@ -427,6 +427,29 @@ def test_stop_mlflow_acquires_startup_lock(tmp_path, monkeypatch):
     assert str(tmp_path / "runtime" / ".rnnoise-mlflow-start.lock") in calls
 
 
+def test_stop_mlflow_reaps_an_owned_child(tmp_path, monkeypatch):
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: 42)
+    monkeypatch.setattr(portable_storage.os, "kill", lambda pid, signal: None)
+    monkeypatch.setattr(portable_storage.os, "waitpid", lambda pid, flags: (pid, 0))
+    monkeypatch.setattr(portable_storage, "sqlite_integrity", lambda database: "ok")
+
+    assert portable_storage._stop_mlflow_locked(tmp_path, timeout=1) == "ok"
+
+
+def test_eject_check_rejects_symlinked_active_experiment(tmp_path, monkeypatch):
+    root = tmp_path
+    active = root / "experiments" / "active"
+    active.mkdir(parents=True)
+    external = tmp_path / "external-experiment"
+    external.mkdir()
+    (active / "trial").symlink_to(external, target_is_directory=True)
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {"volume_uuid": "id", "minimum_free_bytes": 0})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+
+    with pytest.raises(RuntimeError, match="active experiment is a symlink"):
+        portable_storage.eject_check(root)
+
+
 def test_eject_check_rejects_live_training_lock(tmp_path, monkeypatch):
     root = tmp_path
     lock = root / "experiments" / "active" / "trial" / ".rnnoise-training.lock"

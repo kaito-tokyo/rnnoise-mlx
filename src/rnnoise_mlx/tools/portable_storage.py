@@ -334,6 +334,12 @@ def _stop_mlflow_locked(root: Path, timeout: float) -> str:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
+                waited_pid, _ = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                waited_pid = 0
+            if waited_pid == pid:
+                break
+            try:
                 os.kill(pid, 0)
             except ProcessLookupError:
                 break
@@ -582,10 +588,18 @@ def _eject_check_locked(root: Path, *, root_training_guard_held: bool = False) -
     if live_training:
         raise RuntimeError(f"training is still running: {live_training[:5]}")
     active_checkpoints = []
-    for experiment in sorted((root / "experiments" / "active").iterdir()):
+    active_root = root / "experiments" / "active"
+    if active_root.is_symlink():
+        raise RuntimeError(f"active experiment root is a symlink: {active_root}")
+    for experiment in sorted(active_root.iterdir()):
+        if experiment.is_symlink():
+            raise RuntimeError(f"active experiment is a symlink: {experiment}")
         if not experiment.is_dir():
             continue
-        checkpoints = sorted((experiment / "checkpoints").glob("update-*"))
+        checkpoint_root = experiment / "checkpoints"
+        if checkpoint_root.is_symlink():
+            raise RuntimeError(f"active checkpoint root is a symlink: {checkpoint_root}")
+        checkpoints = sorted(checkpoint_root.glob("update-*"))
         if not checkpoints:
             raise RuntimeError(f"active experiment has no complete checkpoint: {experiment}")
         latest = checkpoints[-1]

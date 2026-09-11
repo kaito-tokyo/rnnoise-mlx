@@ -181,6 +181,19 @@ def encode_wav(pcm: bytes, output: Path, sample_rate: int) -> None:
     )
 
 
+def validate_output_path(output_root: Path, relative: Path) -> Path:
+    """Reject output paths that leave the cleanup tree through a symlink."""
+    output = output_root / relative
+    if output.is_symlink():
+        raise ValueError(f"cleanup output must not be a symlink: {output}")
+    parent = output.parent
+    while parent != output_root:
+        if parent.is_symlink():
+            raise ValueError(f"cleanup output parent must not be a symlink: {parent}")
+        parent = parent.parent
+    return output
+
+
 def cleanup_one(source_root: Path, output_root: Path, record: dict[str, Any],
                 processor_factory: Any, threshold: float, margin_samples: int,
                 sample_rate: int, frame_size: int, *, reuse_existing: bool = True) -> dict[str, Any]:
@@ -191,7 +204,7 @@ def cleanup_one(source_root: Path, output_root: Path, record: dict[str, Any],
     if record.get("input_sha256") != sha256(source):
         raise ValueError(f"input checksum differs from filter manifest: {source_relative}")
     output_relative = source_relative.with_suffix(".wav")
-    output = output_root / output_relative
+    output = validate_output_path(output_root, output_relative)
     onset = float(record["onsets_seconds"][f"{threshold:g}"])
     trim_samples = max(0, round(onset * sample_rate) - margin_samples)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -329,11 +342,9 @@ def validate_resume(
             continue
         item = existing[relative]
         source = source_root / relative
-        output = output_root / Path(relative).with_suffix(".wav")
+        output = validate_output_path(output_root, Path(relative).with_suffix(".wav"))
         if (
-            output.is_symlink()
-            or not output.is_file()
-            or output_root.resolve() not in output.resolve().parents
+            not output.is_file()
             or item.get("input_sha256") != sha256(source)
             or item.get("output") != output.relative_to(output_root).as_posix()
             or item.get("output_sha256") != sha256(output)
@@ -420,6 +431,10 @@ def main() -> None:
             )
             try:
                 validate_input_digests(source_root, records)
+                for record in records:
+                    validate_output_path(
+                        output_root, Path(str(record["path"])).with_suffix(".wav")
+                    )
             except ValueError as error:
                 parser.error(str(error))
             reusable_inputs: set[str] = set()
