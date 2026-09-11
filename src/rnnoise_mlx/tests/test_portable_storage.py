@@ -2,6 +2,7 @@ import hashlib
 import os
 from pathlib import Path
 import plistlib
+import stat
 
 import pytest
 
@@ -107,6 +108,7 @@ def test_coordination_locks_use_a_host_wide_directory(tmp_path, monkeypatch):
     path = portable_storage.coordination_lock_path(tmp_path, "operation")
 
     assert path.parent == Path("/tmp")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o660
 
 
 def test_operation_guard_revalidates_after_lock_acquisition(tmp_path, monkeypatch):

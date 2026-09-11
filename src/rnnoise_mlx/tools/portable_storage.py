@@ -132,8 +132,15 @@ def coordination_lock_path(root: Path, name: str) -> Path:
     path = Path("/tmp") / f"rnnoise-mlx-{identity}-{name}.lock"
     if path.is_symlink():
         raise RuntimeError(f"coordination lock must not be a symlink: {path}")
-    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
-    os.close(descriptor)
+    descriptor = os.open(
+        path,
+        os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+        0o660,
+    )
+    try:
+        os.fchmod(descriptor, 0o660)
+    finally:
+        os.close(descriptor)
     return path
 
 
