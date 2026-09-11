@@ -1,32 +1,44 @@
 # SpeexDSP Common Voice experiment
 
-This experiment replaces the learned CJK cleaner with the fixed SpeexDSP
-preprocessor. The existing RNNoise feature extraction, noise mixture, RIR,
-and MLX training pipeline remain unchanged.
+This is an independent training experiment. It replaces the learned CJK
+cleaner with the fixed SpeexDSP preprocessor while retaining the RNNoise
+feature extraction, noise mixture, RIR, and MLX training code. No checkpoint,
+feature file, prepared PCM, or manifest is copied from an earlier experiment.
+All inputs are read from the Dataset root and all outputs go under a new
+experiment directory.
 
 ## Mac mini preparation
 
 Run from `/Users/umireon/work/prodesk-wsl/rnnoise-mlx` with `/opt/homebrew/bin`
-on `PATH`. Keep the original Common Voice archive read-only. The archive and
-dataset manifest are in the shared Drive folder `common-voice-scripted-26.0`.
+on `PATH`. Set these paths before starting; do not point them at an old
+Worktree:
+
+```sh
+DATASET=/Users/umireon/Datasets/rnnoise-mlx-multilingual-corpus-20260713
+EXP=/Users/umireon/work/prodesk-wsl/rnnoise-mlx-experiments/speexdsp-ja-minus12-final-90h-10k
+mkdir -p "$EXP"/{source,manifests,prepared,offsets,features,logs}
+```
+
+Keep the original Common Voice archive under `$DATASET` read-only. The
+Dataset copy is the only source of clips and corpus metadata.
 
 Select speaker-disjoint Japanese clips, extract them into a separate directory,
 measure speech onsets, and clean only accepted clips:
 
 ```sh
 python3 -m rnnoise_mlx.tools.select_common_voice_clips \
-  data/source/common-voice-ja.tar.gz data/manifests/cv-ja-selection.json \
+  "$DATASET/api/common-voice-scripted-26.0/ja/<archive>.tar.gz" "$EXP/manifests/cv-ja-selection.json" \
   --train-hours 8 --eval-minutes 25 --speaker-cap-minutes 5 --seed 141
 python3 -m rnnoise_mlx.tools.extract_common_voice_selection \
-  data/source/common-voice-ja.tar.gz data/manifests/cv-ja-selection.json \
-  data/cv-ja-selected
+  "$DATASET/api/common-voice-scripted-26.0/ja/<archive>.tar.gz" "$EXP/manifests/cv-ja-selection.json" \
+  "$EXP/source/cv-ja-selected"
 python3 -m rnnoise_mlx.tools.analyze_speech_onsets \
-  data/cv-ja-selected data/manifests/cv-ja-onsets \
-  --selection-manifest data/cv-ja-selected/extraction-manifest.json \
+  "$EXP/source/cv-ja-selected" "$EXP/manifests/cv-ja-onsets" \
+  --selection-manifest "$EXP/source/cv-ja-selected/extraction-manifest.json" \
   --filter-threshold -40 --minimum-onset-ms 250 --workers 8
 python3 -m rnnoise_mlx.tools.cleanup_common_voice_ja \
-  data/cv-ja-selected data/common-voice-ja-speex12 \
-  --filter-manifest data/manifests/cv-ja-onsets/filter-manifest.json \
+  "$EXP/source/cv-ja-selected" "$EXP/prepared/common-voice-ja-speex12" \
+  --filter-manifest "$EXP/manifests/cv-ja-onsets/filter-manifest.json" \
   --speex-library /opt/homebrew/lib/libspeexdsp.dylib \
   --noise-suppress-db -12 --threshold -40 --margin-ms 150 \
   --workers 4 --resume
@@ -43,18 +55,18 @@ feature extractor and generate 20,000 train plus 500 evaluation sequences:
 
 ```sh
 python3 -m rnnoise_mlx.tools.prepare_speech_mix \
-  configs/speexdsp-final-90h.example.json data/prepared \
-  --augmentation-prepared /path/to/augmentation-prepared
+  configs/speexdsp-final-90h.example.json "$EXP/prepared/mix" \
+  --augmentation-prepared "$EXP/prepared/augmentation"
 python3 -m rnnoise_mlx.tools.select_speech_offsets \
-  data/prepared/train_speech.pcm data/offsets/train.txt \
+  "$EXP/prepared/mix/train_speech.pcm" "$EXP/offsets/train.txt" \
   --count 20000 --seed 141
 python3 -m rnnoise_mlx.tools.select_speech_offsets \
-  data/prepared/eval_speech.pcm data/offsets/eval.txt \
+  "$EXP/prepared/mix/eval_speech.pcm" "$EXP/offsets/eval.txt" \
   --count 500 --seed 142
 python3 -m rnnoise_mlx.tools.build_dump_features
 python3 -m rnnoise_mlx.tools.generate_features \
-  Vendors/xiph-rnnoise/dump_features data/prepared data/features \
-  --train-count 20000 --eval-count 500 --speech-offsets data/offsets \
+  Vendors/xiph-rnnoise/dump_features "$EXP/prepared/mix" "$EXP/features" \
+  --train-count 20000 --eval-count 500 --speech-offsets "$EXP/offsets" \
   --seed 141
 ```
 
