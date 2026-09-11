@@ -1,0 +1,4 @@
+# Local WSL control-plane dependencies for colab/start_session.sh.
+google-colab-cli==0.7.0
+# Colab CLI 0.7.0 expects the KernelClient API from this release line.
+jupyter-kernel-client==0.15.0

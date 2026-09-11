@@ -1,5 +1,21 @@
 # Colab helpers
 
+Install the local Colab CLI control-plane dependencies from
+`requirements-colab-cli-lock.txt`. This is separate from the Python environment
+inside the Colab VM:
+
+```sh
+pipx inject google-colab-cli -r requirements-colab-cli-lock.txt
+```
+
+The lock deliberately pins `jupyter-kernel-client==0.15.0`; newer 1.0.x
+releases do not expose the `KernelClient` API expected by Colab CLI 0.7.0.
+Inside the GPU VM, install the CUDA MLX pair from the runtime lock:
+
+```sh
+python -m pip install -r requirements-colab-lock.txt
+```
+
 These helpers run an ephemeral Colab GPU runtime from WSL. WSL is configured
 in mirror mode, so the remote training process uses the Windows MLflow server
 at `http://localhost:5000`.
