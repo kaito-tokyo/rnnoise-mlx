@@ -42,6 +42,16 @@ esac
 [[ -r "$identity" ]] || { echo "Cannot read SSH identity: $identity" >&2; exit 1; }
 mlflow_uri=${mlflow_uri%/}
 [[ -n "$mlflow_uri" ]] || { echo "MLflow URI must not be only slashes" >&2; exit 2; }
+if [[ "$mlflow_uri" =~ ^(https?)://(localhost|127\.0\.0\.1)(:([0-9]+))?(/.*)?$ ]]; then
+  mlflow_scheme=${BASH_REMATCH[1]}
+  mlflow_port=${BASH_REMATCH[4]}
+  if [[ -z "$mlflow_port" ]]; then
+    [[ "$mlflow_scheme" == https ]] && mlflow_port=443 || mlflow_port=80
+  fi
+else
+  echo "MLflow URI must use localhost or 127.0.0.1: $mlflow_uri" >&2
+  exit 2
+fi
 
 if (( create )); then
   args=(--auth "$auth" new --session "$session")
@@ -84,7 +94,7 @@ echo "MLflow is ready at $MLFLOW_TRACKING_URI"
 exec bash -l'
 remote_env="MLFLOW_TRACKING_URI=$(printf '%q' "$mlflow_uri")"
 ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-  -R 5000:127.0.0.1:5000 \
+  -R "$mlflow_port:127.0.0.1:$mlflow_port" \
   "${ssh_options[@]}" "$ssh_host" \
   "$remote_env bash -c $(printf '%q' "$remote_command")"
 

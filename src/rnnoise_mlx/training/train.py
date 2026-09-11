@@ -219,6 +219,10 @@ def main():
 
     def request_stop(signum, frame):
         nonlocal stop_requested
+        if stop_requested:
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+            return
         stop_requested = True
 
     signal.signal(signal.SIGINT, request_stop)
