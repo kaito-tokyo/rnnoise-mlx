@@ -101,6 +101,24 @@ def test_machine_id_distinguishes_hosts_with_the_same_short_name(tmp_path, monke
     assert first.startswith("shared-")
 
 
+def test_coordination_locks_use_a_host_wide_directory(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "other-cache"))
+
+    path = portable_storage.coordination_lock_path(tmp_path, "operation")
+
+    assert path.parent == Path("/tmp")
+
+
+def test_operation_guard_revalidates_after_lock_acquisition(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: calls.append(root) or {})
+
+    with portable_storage.volume_operation_guard(tmp_path):
+        pass
+
+    assert calls == [tmp_path]
+
+
 def test_verify_copy_detects_matching_and_different_trees(tmp_path):
     source = tmp_path / "source"
     destination = tmp_path / "destination"

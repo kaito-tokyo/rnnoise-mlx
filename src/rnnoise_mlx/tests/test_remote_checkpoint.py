@@ -125,7 +125,7 @@ def test_download_preflights_destination_on_registered_volume(tmp_path, monkeypa
     with pytest.raises(FileNotFoundError):
         remote.download_checkpoint(Client(tmp_path / "server"), "run", destination)
 
-    assert calls == [root]
+    assert calls == [root, root]
 
 
 @pytest.mark.parametrize("uri", ["file:///tmp/mlruns", "sqlite:///db", "./mlruns"])

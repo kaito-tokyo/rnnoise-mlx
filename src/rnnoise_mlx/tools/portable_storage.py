@@ -128,10 +128,12 @@ def registered_volume_for_paths(paths: list[Path]) -> Path | None:
 
 def coordination_lock_path(root: Path, name: str) -> Path:
     """Use a lock outside a volume that may be ejected."""
-    cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
     identity = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
-    path = cache_root / "rnnoise-mlx" / "locks" / f"{identity}-{name}.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = Path("/tmp") / f"rnnoise-mlx-{identity}-{name}.lock"
+    if path.is_symlink():
+        raise RuntimeError(f"coordination lock must not be a symlink: {path}")
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
+    os.close(descriptor)
     return path
 
 
@@ -142,6 +144,7 @@ def volume_operation_guard(root: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
+        load_volume_config(root)
         yield
 
 
