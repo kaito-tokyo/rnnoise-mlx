@@ -513,6 +513,20 @@ def test_eject_check_rejects_symlinked_checkpoint_payload(tmp_path, monkeypatch)
         portable_storage.eject_check(root)
 
 
+def test_eject_check_rejects_symlinked_checkpoint_manifest(tmp_path, monkeypatch):
+    root = tmp_path
+    checkpoint = root / "experiments" / "active" / "trial" / "checkpoints" / "update-1"
+    checkpoint.mkdir(parents=True)
+    external = tmp_path / "external-manifest.json"
+    portable_storage._json_write(external, {"format_version": 1, "files": {}})
+    (checkpoint / "manifest.json").symlink_to(external)
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {"volume_uuid": "id", "minimum_free_bytes": 0})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+
+    with pytest.raises(RuntimeError, match="manifest is a symlink"):
+        portable_storage.eject_check(root)
+
+
 def test_finalize_verified_copy_renames_and_registers(tmp_path, monkeypatch):
     root = tmp_path
     temporary = root / "datasets" / ".source.partial"

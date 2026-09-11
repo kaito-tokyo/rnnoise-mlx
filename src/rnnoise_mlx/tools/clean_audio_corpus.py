@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -88,25 +89,33 @@ def main() -> None:
         filter_manifest_sha256 = sha256(args.filter_manifest)
     if not paths:
         parser.error(f"no supported audio below {source_root}")
-    output_root.mkdir(parents=True, exist_ok=args.resume)
-    worker = lambda path: clean_one(executable, model, source_root, output_root, path)
-    with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        records = list(executor.map(worker, paths))
-    manifest = {
-        "format_version": 1,
-        "input_root": str(source_root),
-        "filter_manifest": str(args.filter_manifest.resolve()) if args.filter_manifest else None,
-        "filter_manifest_sha256": filter_manifest_sha256,
-        "model": str(model),
-        "model_files": {
-            path.relative_to(model).as_posix(): sha256(path)
-            for path in sorted(model.rglob("*")) if path.is_file()
-        },
-        "files": records,
-    }
-    (output_root / "cleaning-manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    )
+    from .portable_storage import registered_volume_for_paths, volume_operation_guard
+
+    guarded_paths = [source_root, output_root, executable, model]
+    if args.filter_manifest:
+        guarded_paths.append(args.filter_manifest.resolve())
+    guarded_paths.extend(path.resolve() for path in paths)
+    portable_root = registered_volume_for_paths(guarded_paths)
+    with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        output_root.mkdir(parents=True, exist_ok=args.resume)
+        worker = lambda path: clean_one(executable, model, source_root, output_root, path)
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            records = list(executor.map(worker, paths))
+        manifest = {
+            "format_version": 1,
+            "input_root": str(source_root),
+            "filter_manifest": str(args.filter_manifest.resolve()) if args.filter_manifest else None,
+            "filter_manifest_sha256": filter_manifest_sha256,
+            "model": str(model),
+            "model_files": {
+                path.relative_to(model).as_posix(): sha256(path)
+                for path in sorted(model.rglob("*")) if path.is_file()
+            },
+            "files": records,
+        }
+        (output_root / "cleaning-manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+        )
     print(json.dumps({"cleaned_files": len(records), "output": str(output_root)}))
 
 

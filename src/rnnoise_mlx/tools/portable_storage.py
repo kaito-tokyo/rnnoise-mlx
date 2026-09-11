@@ -589,7 +589,10 @@ def _eject_check_locked(root: Path, *, root_training_guard_held: bool = False) -
         if not checkpoints:
             raise RuntimeError(f"active experiment has no complete checkpoint: {experiment}")
         latest = checkpoints[-1]
-        manifest = json.loads((latest / "manifest.json").read_text())
+        manifest_path = latest / "manifest.json"
+        if manifest_path.is_symlink():
+            raise RuntimeError(f"active checkpoint manifest is a symlink: {manifest_path}")
+        manifest = json.loads(manifest_path.read_text())
         required = {"model.safetensors", "optimizer.safetensors", "mlx-random-state.safetensors", "trainer-state.json"}
         files = manifest.get("files")
         if manifest.get("format_version") != 1 or not isinstance(files, dict) or set(files) != required:

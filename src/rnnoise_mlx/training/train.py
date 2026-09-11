@@ -72,7 +72,7 @@ def _register_training_lock(*paths: Path | None) -> None:
                     or previous["started_at"] != _process_started_at(pid)
                 ):
                     raise OSError
-            except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError):
                 lock.unlink(missing_ok=True)
             else:
                 raise RuntimeError(f"training volume is already active: {root}")

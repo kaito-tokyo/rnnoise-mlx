@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -59,17 +60,28 @@ def main() -> None:
     if args.output.exists() and not args.resume:
         parser.error(f"output already exists: {args.output}")
     records = [r for r in json.loads(args.filter_manifest.read_text())["records"] if r["accepted"]]
-    args.output.mkdir(parents=True, exist_ok=True)
-    margin_samples = round(args.margin_ms * args.sample_rate / 1000)
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        results = list(pool.map(lambda r: trim_one(args.input.resolve(), args.output.resolve(), r,
-                                                   args.threshold, margin_samples, args.sample_rate), records))
-    manifest = {"format_version": 1, "input_root": str(args.input.resolve()),
-                "filter_manifest": str(args.filter_manifest.resolve()),
-                "filter_manifest_sha256": sha256(args.filter_manifest),
-                "sample_rate_hz": args.sample_rate, "margin_samples": margin_samples,
-                "files": results}
-    (args.output / "trim-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    input_root = args.input.resolve()
+    output_root = args.output.resolve()
+    from .portable_storage import registered_volume_for_paths, volume_operation_guard
+
+    guarded_paths = [input_root, output_root, args.filter_manifest.resolve()]
+    guarded_paths.extend(
+        (input_root / Path(str(record["path"])).with_suffix(".wav")).resolve()
+        for record in records
+    )
+    portable_root = registered_volume_for_paths(guarded_paths)
+    with volume_operation_guard(portable_root) if portable_root else nullcontext():
+        output_root.mkdir(parents=True, exist_ok=True)
+        margin_samples = round(args.margin_ms * args.sample_rate / 1000)
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            results = list(pool.map(lambda r: trim_one(input_root, output_root, r,
+                                                       args.threshold, margin_samples, args.sample_rate), records))
+        manifest = {"format_version": 1, "input_root": str(input_root),
+                    "filter_manifest": str(args.filter_manifest.resolve()),
+                    "filter_manifest_sha256": sha256(args.filter_manifest),
+                    "sample_rate_hz": args.sample_rate, "margin_samples": margin_samples,
+                    "files": results}
+        (output_root / "trim-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     print(json.dumps({"trimmed_files": len(results), "output": str(args.output.resolve())}))
 
 
