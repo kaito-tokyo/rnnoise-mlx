@@ -175,6 +175,8 @@ def _running_pid(root: Path) -> int | None:
         return None
     try:
         metadata = json.loads(path.read_text())
+        if metadata == {"starting": True}:
+            raise RuntimeError(f"MLflow startup state remains: {path}")
         pid = int(metadata["pid"])
         expected_database = str((root / "mlflow" / "mlflow.db").resolve())
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -215,10 +217,11 @@ def _training_lock_is_live(metadata: object) -> bool:
         return False
 
 
-def _remove_pid_if_owned(root: Path, pid: int) -> None:
+def _remove_pid_if_owned(root: Path, pid: int | None) -> None:
     path = _pid_path(root)
     try:
-        if int(json.loads(path.read_text())["pid"]) == pid:
+        metadata = json.loads(path.read_text())
+        if metadata == {"starting": True} or (pid is not None and int(metadata["pid"]) == pid):
             path.unlink(missing_ok=True)
     except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         pass
@@ -265,6 +268,7 @@ def _start_mlflow_locked(root: Path, port: int, timeout: float) -> int:
     ]
     process = None
     try:
+        _json_write(_pid_path(root), {"starting": True})
         process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         _json_write(_pid_path(root), {"pid": process.pid, "database": str(database.resolve())})
         deadline = time.monotonic() + timeout
@@ -293,8 +297,7 @@ def _start_mlflow_locked(root: Path, port: int, timeout: float) -> int:
                 except ProcessLookupError:
                     pass
                 process.wait()
-        if process is not None:
-            _remove_pid_if_owned(root, process.pid)
+        _remove_pid_if_owned(root, process.pid if process is not None else None)
         raise
     finally:
         log.close()
@@ -419,12 +422,12 @@ def _copy_tree_locked(source: Path, destination: Path, record: Path) -> dict[str
     destination = destination.resolve()
     if source == destination or source in destination.parents:
         raise ValueError("copy destination must not be inside the source")
+    if record.exists() or record.is_symlink():
+        raise FileExistsError(f"verification record already exists: {record}")
     record = record.resolve()
     if _is_within(record, source) or _is_within(record, destination):
         raise ValueError("verification record must be outside source and destination")
     if destination.exists():
-        if record.exists():
-            raise FileExistsError(f"destination already exists: {destination}")
         # A crash after rename but before _json_write leaves a verified
         # destination without its audit record. Recover only after hashing it.
         return _verify_copy_locked(source, destination, record)

@@ -137,6 +137,18 @@ def test_copy_tree_rejects_destination_below_source(tmp_path):
         portable_storage.copy_tree(source, source / "copy", tmp_path / "copy.json")
 
 
+def test_copy_tree_rejects_existing_audit_record(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    record = tmp_path / "record.json"
+    source.mkdir()
+    (source / "file").write_bytes(b"payload")
+    record.write_text("old audit")
+
+    with pytest.raises(FileExistsError, match="record already exists"):
+        portable_storage.copy_tree(source, destination, record)
+
+
 def test_copy_tree_preserves_directory_symlinks(tmp_path):
     source = tmp_path / "source"
     external = tmp_path / "external"
@@ -255,6 +267,17 @@ def test_mlflow_failure_cleanup_preserves_another_process_pid_record(tmp_path):
     portable_storage._remove_pid_if_owned(tmp_path, 42)
 
     assert __import__("json").loads(pid_path.read_text())["pid"] == 43
+
+
+def test_running_pid_fails_closed_for_interrupted_startup(tmp_path):
+    (tmp_path / "mlflow").mkdir()
+    pid_path = tmp_path / "mlflow" / "mlflow.pid"
+    portable_storage._json_write(pid_path, {"starting": True})
+
+    with pytest.raises(RuntimeError, match="startup state remains"):
+        portable_storage._running_pid(tmp_path)
+
+    assert pid_path.is_file()
 
 
 def test_start_mlflow_waits_for_failed_process_before_removing_pid(tmp_path, monkeypatch):
