@@ -61,54 +61,32 @@ fi
 known_hosts_dir="$HOME/.cache/rnnoise/colab-known-hosts"
 mkdir -p -m 700 "$known_hosts_dir"
 known_hosts="$known_hosts_dir/$session"
-control_dir="$HOME/.cache/rnnoise/colab-control"
-mkdir -p -m 700 "$control_dir"
-control_path="$control_dir/$session"
 if (( create )); then
   rm -f -- "$known_hosts"
-  rm -f -- "$control_path"
 fi
 proxy_command="colab --auth $(printf '%q' "$auth") ssh --proxy-mode --session $(printf '%q' "$session") --identity $(printf '%q' "$identity")"
-ssh_args=(
+ssh_options=(
   -i "$identity"
   -o "ProxyCommand=$proxy_command"
   -o "UserKnownHostsFile=$known_hosts"
   -o "HostKeyAlias=colab-$session"
-  -o "ControlMaster=auto"
-  -o "ControlPersist=600"
-  -o "ControlPath=$control_path"
   -o ExitOnForwardFailure=yes
   -o StrictHostKeyChecking=accept-new
-  root@colab-runtime
 )
-
-forward_args=(
-  "${ssh_args[@]}"
-  -o ServerAliveInterval=30
-  -o ServerAliveCountMax=3
-  -N
-  -R 5000:127.0.0.1:5000
-)
-
-ssh -f "${forward_args[@]}"
+ssh_host=root@colab-runtime
 
 remote_command='set -euo pipefail
 : "${MLFLOW_TRACKING_URI:?Set MLFLOW_TRACKING_URI}"
 health_status=$(curl --fail --silent --show-error --max-time 20 \
   --output /dev/null --write-out "%{http_code}" "$MLFLOW_TRACKING_URI/health")
 [[ "$health_status" == 200 ]] || { echo "MLflow health check returned HTTP $health_status" >&2; exit 1; }
-echo "MLflow is ready at $MLFLOW_TRACKING_URI"'
+echo "MLflow is ready at $MLFLOW_TRACKING_URI"
+exec bash -l'
 remote_env="MLFLOW_TRACKING_URI=$(printf '%q' "$mlflow_uri")"
-ssh "${ssh_args[@]}" "$remote_env bash -c $(printf '%q' "$remote_command")"
+ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+  -R 5000:127.0.0.1:5000 \
+  "${ssh_options[@]}" "$ssh_host" \
+  "$remote_env bash -c $(printf '%q' "$remote_command")"
 
 stop_on_failure=0
 trap - EXIT
-
-cat <<EOF
-
-Ready: $session
-MLflow: $mlflow_uri
-SSH reverse forward: Colab localhost:5000 -> WSL 127.0.0.1:5000
-Stop the session with:
-  colab --auth $auth stop --session $session
-EOF

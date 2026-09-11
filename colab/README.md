@@ -8,8 +8,12 @@ at `http://localhost:5000`.
 
 1. creates a Colab runtime;
 2. creates an SSH reverse forward from Colab `localhost:5000` to WSL
-   `127.0.0.1:5000`; and
+ `127.0.0.1:5000`; and
 3. checks the forwarded MLflow `/health` endpoint.
+
+The command remains attached to the remote shell so the SSH reverse forward
+stays alive. Run the training command in that shell; exiting it closes the
+forward. Stop the Colab session separately when finished.
 
 Example:
 
@@ -21,7 +25,7 @@ Example:
 ```
 
 The default MLflow URI is `http://localhost:5000`. The helper keeps the SSH
-reverse forward alive for the lifetime of the Colab session, so remote training
+reverse forward alive while its remote shell is open, so remote training
 processes can use that URI without a separate network service.
 
 The helper uses the Colab CLI `adc` authentication strategy by default. Set up
