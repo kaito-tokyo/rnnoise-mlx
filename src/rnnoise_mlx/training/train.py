@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
 import json
+import os
+import signal
 from pathlib import Path
 import time
 
@@ -40,6 +42,29 @@ def _recover_initial_evaluation(output: Path, existing_run) -> dict | None:
         if summary.get("initial_evaluation") is not None:
             return summary["initial_evaluation"]
     return initial_evaluation_from_run(existing_run) if existing_run is not None else None
+
+
+def _validate_downloaded_checkpoint_run(checkpoint: Path, run_id: str | None) -> None:
+    marker = checkpoint / "complete.json"
+    if marker.is_symlink() or (marker.exists() and not marker.is_file()):
+        raise ValueError(f"invalid downloaded checkpoint marker: {marker}")
+    if not marker.exists():
+        return
+    try:
+        metadata = json.loads(marker.read_text())
+        marker_run_id = metadata["run_id"]
+        update = int(metadata["update"])
+        manifest_sha256 = str(metadata["manifest_sha256"])
+        if metadata.get("format_version") != 1:
+            raise ValueError
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        raise ValueError(f"invalid downloaded checkpoint marker: {marker}") from None
+    if marker_run_id != run_id:
+        raise ValueError("downloaded checkpoint run_id does not match --mlflow-run-id")
+    from rnnoise_mlx.tools.mlflow_checkpoint import verify_checkpoint
+
+    if verify_checkpoint(checkpoint, update) != manifest_sha256:
+        raise ValueError("downloaded checkpoint differs from completion marker")
 
 
 def main():
@@ -90,6 +115,12 @@ def main():
     )
     parser.add_argument("--checkpoint-every", type=int, default=32)
     parser.add_argument(
+        "--mlflow-log-checkpoints",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="save verified checkpoints to MLflow (default: enabled)",
+    )
+    parser.add_argument(
         "--provenance-artifact",
         action="append",
         type=Path,
@@ -121,7 +152,6 @@ def main():
         parser.error("--resume-from requires --mlflow-run-id")
 
     output = Path(args.output)
-    output.mkdir(parents=True, exist_ok=True)
     existing_run = validate_tracking_target(
         args.mlflow_tracking_uri, args.mlflow_experiment, args.mlflow_run_id
     )
@@ -137,6 +167,9 @@ def main():
         vars(args), "eval_features"
     )
     dataset = FeatureDataset(args.features, args.sequence_length)
+    if dataset.sequence_count < args.batch_size:
+        raise ValueError("feature dataset must contain at least one complete batch")
+    output.mkdir(parents=True, exist_ok=True)
     mx.random.seed(args.seed)
     config = ModelConfig()
     (output / "model-config.json").write_text(
@@ -153,6 +186,7 @@ def main():
     elapsed_before_resume = 0.0
     initial_evaluation = None
     if args.resume_from:
+        _validate_downloaded_checkpoint_run(args.resume_from, args.mlflow_run_id)
         restored = load_checkpoint(
             args.resume_from.resolve(),
             model,
@@ -181,6 +215,15 @@ def main():
             json.dumps({"resumed_from": str(args.resume_from), "update": update}),
             flush=True,
         )
+    stop_requested = False
+
+    def request_stop(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
+
     tracker_parameters = {**vars(args), "resume_update": update if args.resume_from else 0}
     tracker = MLflowTracker(
         args.mlflow_tracking_uri,
@@ -203,6 +246,36 @@ def main():
             else None
         )
         tracker.log_evaluation("initial", initial_evaluation, 0)
+    if stop_requested:
+        if args.resume_from is None:
+            checkpoint = save_checkpoint(
+                output / "checkpoints",
+                model,
+                optimizer,
+                config,
+                update=update,
+                next_epoch=1,
+                next_batch=0,
+                processed_frames=processed_frames,
+                elapsed_seconds=elapsed_before_resume,
+                history=history,
+                training_config=vars(args),
+                initial_evaluation=initial_evaluation,
+                feature_identity=verified_feature_identity,
+                evaluation_feature_identity=verified_evaluation_feature_identity,
+            )
+            if args.mlflow_log_checkpoints:
+                tracker.log_checkpoint(checkpoint, update)
+        summary = {
+            "updates": update,
+            "stop_requested": True,
+            "training_seconds": elapsed_before_resume,
+            "processed_frames": processed_frames,
+            "history": history,
+        }
+        (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
+        tracker.pause(summary, output)
+        return
 
     def objective(model, features, gain, vad):
         pred_gain, pred_vad, _ = model(features)
@@ -357,7 +430,32 @@ def main():
         pending_losses.clear()
 
     checkpoint_due = False
+
+    def commit_checkpoint(next_epoch: int, next_batch: int) -> None:
+        collect_pending()
+        mx.eval(model.state, optimizer.state)
+        checkpoint = save_checkpoint(
+            output / "checkpoints",
+            model,
+            optimizer,
+            config,
+            update=update,
+            next_epoch=next_epoch,
+            next_batch=next_batch,
+            processed_frames=processed_frames,
+            elapsed_seconds=elapsed_before_resume + time.monotonic() - started,
+            history=history,
+            training_config=vars(args),
+            initial_evaluation=initial_evaluation,
+            feature_identity=verified_feature_identity,
+            evaluation_feature_identity=verified_evaluation_feature_identity,
+        )
+        if args.mlflow_log_checkpoints:
+            tracker.log_checkpoint(checkpoint, update)
+
     for epoch in range(resume_epoch, args.epochs + 1):
+        stop_checkpoint_committed = False
+        last_batch_checkpoint_committed = False
         first_batch = resume_batch if epoch == resume_epoch else 0
         batch_index = first_batch
         for features, gain, vad in batches_for_epoch(epoch, first_batch):
@@ -416,36 +514,39 @@ def main():
                 ):
                     break
             batch_index += 1
-            if checkpoint_due or (
+            final_batch = (
+                epoch == args.epochs
+                and batch_index >= dataset.sequence_count // args.batch_size
+            )
+            checkpoint_committed = False
+            if checkpoint_due or stop_requested or final_batch or (
                 args.max_updates is not None and update >= args.max_updates
             ):
-                collect_pending()
-                mx.eval(model.state, optimizer.state)
                 next_epoch = epoch
                 next_batch = batch_index
                 if next_batch >= dataset.sequence_count // args.batch_size:
                     next_epoch += 1
                     next_batch = 0
-                checkpoint = save_checkpoint(
-                    output / "checkpoints",
-                    model,
-                    optimizer,
-                    config,
-                    update=update,
-                    next_epoch=next_epoch,
-                    next_batch=next_batch,
-                    processed_frames=processed_frames,
-                    elapsed_seconds=elapsed_before_resume + time.monotonic() - started,
-                    history=history,
-                    training_config=vars(args),
-                    initial_evaluation=initial_evaluation,
-                    feature_identity=verified_feature_identity,
-                    evaluation_feature_identity=verified_evaluation_feature_identity,
-                )
-                tracker.log_checkpoint(checkpoint, update)
+                commit_checkpoint(next_epoch, next_batch)
                 checkpoint_due = False
+                checkpoint_committed = True
+            last_batch_checkpoint_committed = checkpoint_committed
+            if stop_requested:
+                if not checkpoint_committed:
+                    next_epoch = epoch
+                    next_batch = batch_index
+                    if next_batch >= dataset.sequence_count // args.batch_size:
+                        next_epoch += 1
+                        next_batch = 0
+                    commit_checkpoint(next_epoch, next_batch)
+                stop_checkpoint_committed = True
+                break
             if args.max_updates is not None and update >= args.max_updates:
                 break
+        if stop_requested:
+            if not stop_checkpoint_committed and not last_batch_checkpoint_committed:
+                commit_checkpoint(epoch + 1, 0)
+            break
         if args.max_updates is not None and update >= args.max_updates:
             break
 
@@ -453,13 +554,37 @@ def main():
     mx.eval(model.state, optimizer.state)
 
     training_elapsed = elapsed_before_resume + time.monotonic() - started
+    if stop_requested:
+        summary = {
+            "updates": update,
+            "stop_requested": True,
+            "training_seconds": training_elapsed,
+            "processed_frames": processed_frames,
+            "history": history,
+        }
+        (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
+        tracker.pause(summary, output)
+        return
+
     model.save(str(output / "model.safetensors"))
     trained_evaluation = evaluate(model, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
     reloaded = RNNoise.load(str(output / "model.safetensors"), config)
     reloaded_evaluation = evaluate(reloaded, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
     reload_matches = trained_evaluation == reloaded_evaluation
+    if stop_requested:
+        summary = {
+            "updates": update,
+            "stop_requested": True,
+            "training_seconds": training_elapsed,
+            "processed_frames": processed_frames,
+            "history": history,
+        }
+        (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
+        tracker.pause(summary, output)
+        return
     summary = {
         "updates": update,
+        "stop_requested": stop_requested,
         "training_seconds": training_elapsed,
         "updates_per_second": update / training_elapsed,
         "processed_frames": processed_frames,

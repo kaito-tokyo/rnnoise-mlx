@@ -102,7 +102,7 @@ def save_checkpoint(
         )
         mx.save_safetensors(
             str(temporary / "mlx-random-state.safetensors"),
-            _flat_state(mx.random.state),
+            _flat_state(list(mx.random.state)),
         )
         trainer_state = {
             "format_version": FORMAT_VERSION,
@@ -209,12 +209,17 @@ def load_checkpoint(
         raise ValueError("checkpoint evaluation features differ")
     model.load_weights(str(checkpoint / "model.safetensors"))
     optimizer.state = tree_unflatten(mx.load(str(checkpoint / "optimizer.safetensors")))
-    # MLX keeps an internal reference to this list. Rebinding the public
-    # attribute leaves the generator on its previous state, so replace the
-    # list contents in place.
-    mx.random.state[:] = tree_unflatten(
+    saved_random_state = tree_unflatten(
         mx.load(str(checkpoint / "mlx-random-state.safetensors"))
     )
+    # MLX 0.32 exposes a read-only state sentinel. Its PRNG key is the
+    # high/low uint32 words of a uint64 seed; seed() restores the internal
+    # generator without rebinding the public state (also works on 0.31).
+    key = saved_random_state[0]
+    if len(saved_random_state) != 1 or key.shape != (2,) or key.dtype != mx.uint32:
+        raise ValueError("unsupported MLX random state")
+    high, low = key.tolist()
+    mx.random.seed((int(high) << 32) | int(low))
     mx.eval(model.state, optimizer.state, mx.random.state)
     state = json.loads((checkpoint / "trainer-state.json").read_text())
     if state.get("format_version") != FORMAT_VERSION:

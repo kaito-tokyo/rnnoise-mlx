@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 from typing import Any
+from urllib.parse import urlparse
 
 import mlflow
 from mlflow.tracking import MlflowClient
@@ -85,10 +86,22 @@ def _git_metadata(root: Path) -> dict[str, str]:
 def validate_tracking_target(
     tracking_uri: str, experiment: str, run_id: str | None = None
 ):
-    """Verify server access and, when resuming, the run's experiment."""
+    """Verify HTTP(S) server access and, when resuming, the run's experiment."""
+    parsed_uri = urlparse(tracking_uri)
+    if parsed_uri.scheme not in {"http", "https"} or not parsed_uri.netloc:
+        raise ValueError(
+            "MLflow tracking URI must be an HTTP(S) server; direct local "
+            "file and SQLite tracking are forbidden"
+        )
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
-    client.search_experiments(max_results=1)
+    try:
+        client.search_experiments(max_results=1)
+    except Exception as error:
+        raise ConnectionError(
+            f"MLflow Tracking Server is unavailable at {tracking_uri}; "
+            "training aborted without tracking-store fallback"
+        ) from error
     if run_id is None:
         return None
     selected_experiment = client.get_experiment_by_name(experiment)
@@ -103,7 +116,7 @@ def validate_tracking_target(
 
 
 class MLflowTracker:
-    """Own one remote MLflow run and finalize it on success or failure."""
+    """Own one HTTP(S)-served MLflow run and finalize it on success or failure."""
 
     def __init__(
         self,
@@ -119,6 +132,8 @@ class MLflowTracker:
         existing_run = validate_tracking_target(tracking_uri, experiment, run_id)
         tags = {
             "job_type": "training",
+            "logical_status": "active",
+            "stop_requested": "false",
             **_git_metadata(Path(__file__).resolve().parents[3]),
         }
         if run_id is None:
@@ -127,7 +142,7 @@ class MLflowTracker:
         else:
             assert existing_run is not None
             self.run = mlflow.start_run(run_id=run_id)
-            mlflow.set_tags({**tags, "resumed": "true"})
+            mlflow.set_tags({**tags, "resumed": "true", "logical_status": "active", "stop_requested": "false"})
         self.closed = False
         normalized = _json_value(
             {key: value for key, value in parameters.items() if key != "mlflow_run_id"}
@@ -187,11 +202,12 @@ class MLflowTracker:
         )
 
     def log_checkpoint(self, checkpoint: Path, update: int) -> None:
-        """Upload every complete checkpoint under an immutable update path."""
-        mlflow.log_artifacts(
-            str(checkpoint), artifact_path=f"checkpoints/{checkpoint.name}"
-        )
+        """Publish only round-trip verified, committed checkpoints."""
+        from ..tools.mlflow_checkpoint import upload_checkpoint
+
+        artifact = upload_checkpoint(MlflowClient(), self.run_id, checkpoint, update)
         mlflow.log_metric("checkpoint_uploaded_update", float(update), step=update)
+        mlflow.set_tag("checkpoint_latest_artifact", artifact)
 
     def log_provenance_artifacts(
         self, artifacts: list[Path], namespace: str = "chapter-00000000"
@@ -232,10 +248,19 @@ class MLflowTracker:
         mlflow.log_artifact(str(output / "model.safetensors"), artifact_path="model")
         mlflow.log_artifact(str(output / "model-config.json"), artifact_path="model")
         mlflow.log_artifact(str(output / "training.json"), artifact_path="model")
+        mlflow.set_tags({"logical_status": "completed", "stop_requested": "false"})
         mlflow.end_run(status="FINISHED")
+        self.closed = True
+
+    def pause(self, summary: dict[str, Any], output: Path) -> None:
+        """Record a resumable stop without representing it as completion."""
+        mlflow.set_tags({"logical_status": "paused", "stop_requested": "true"})
+        mlflow.log_artifact(str(output / "training.json"), artifact_path="model")
+        mlflow.end_run(status="KILLED")
         self.closed = True
 
     def fail_if_open(self) -> None:
         if not self.closed:
+            mlflow.set_tags({"logical_status": "failed", "stop_requested": "false"})
             mlflow.end_run(status="FAILED")
             self.closed = True
