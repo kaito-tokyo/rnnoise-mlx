@@ -376,6 +376,8 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def verify_copy(source: Path, destination: Path, record: Path | None = None) -> dict[str, object]:
+    if record is not None and (record.exists() or record.is_symlink()):
+        raise FileExistsError(f"verification record already exists: {record}")
     paths = [source, destination]
     if record is not None:
         paths.append(record)
@@ -540,6 +542,22 @@ def eject_check(root: Path) -> dict[str, object]:
                 return _eject_check_locked(root, root_training_guard_held=True)
 
 
+def eject_volume(root: Path) -> dict[str, object]:
+    """Verify and eject while excluding new portable-volume operations."""
+    load_volume_config(root)
+    startup_lock = root / "runtime" / ".rnnoise-mlflow-start.lock"
+    startup_lock.parent.mkdir(parents=True, exist_ok=True)
+    with startup_lock.open("a+") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        training_guard = root / ".rnnoise-training.lock.guard"
+        with training_guard.open("a+") as training_stream:
+            fcntl.flock(training_stream, fcntl.LOCK_EX)
+            with volume_operation_guard(root):
+                result = _eject_check_locked(root, root_training_guard_held=True)
+                subprocess.run(["/usr/sbin/diskutil", "eject", str(root)], check=True)
+                return result
+
+
 def _eject_check_locked(root: Path, *, root_training_guard_held: bool = False) -> dict[str, object]:
     config = load_volume_config(root)
     running = _running_pid(root)
@@ -579,7 +597,8 @@ def _eject_check_locked(root: Path, *, root_training_guard_held: bool = False) -
         corrupt = [
             name
             for name, expected in files.items()
-            if not (latest / name).is_file()
+            if (latest / name).is_symlink()
+            or not (latest / name).is_file()
             or hashlib.sha256((latest / name).read_bytes()).hexdigest() != expected
         ]
         if corrupt:
@@ -655,6 +674,7 @@ def main() -> None:
     finalize.add_argument("--files", type=int, required=True)
     finalize.add_argument("--bytes", type=int, required=True)
     subparsers.add_parser("eject-check")
+    subparsers.add_parser("eject")
     args = parser.parse_args()
 
     if args.command == "machine-id":
@@ -687,8 +707,10 @@ def main() -> None:
             files=args.files,
             total_bytes=args.bytes,
         )
-    else:
+    elif args.command == "eject-check":
         result = eject_check(args.root)
+    else:
+        result = eject_volume(args.root)
     print(json.dumps(display_result(result), indent=2, sort_keys=True, default=str))
 
 

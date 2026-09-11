@@ -56,12 +56,11 @@ Colab-to-home-MLflow workflow. For SSD-only operation where the active experimen
 output is already the durable authority, pass `--no-mlflow-log-checkpoints` to
 avoid duplication. See README for the committed-upload recovery command.
 
-Stop the server and verify SQLite before moving the volume:
+Stop the server and eject the volume through the guarded command:
 
 ```sh
 python -m rnnoise_mlx.tools.portable_storage mlflow-stop
-python -m rnnoise_mlx.tools.portable_storage eject-check
-diskutil eject /Volumes/rnnoise-mlx-train
+python -m rnnoise_mlx.tools.portable_storage eject
 ```
 
 Never move or eject the volume while training or MLflow is running. Resume a

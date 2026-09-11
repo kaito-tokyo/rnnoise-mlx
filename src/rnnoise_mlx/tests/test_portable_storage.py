@@ -1,3 +1,4 @@
+import hashlib
 import os
 from pathlib import Path
 import plistlib
@@ -111,6 +112,20 @@ def test_verify_copy_rejects_audit_record_inside_verified_tree(tmp_path):
 
     with pytest.raises(ValueError, match="outside"):
         portable_storage.verify_copy(source, destination, source / "verification.json")
+
+
+def test_verify_copy_rejects_existing_audit_record(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    record = tmp_path / "record.json"
+    source.mkdir()
+    destination.mkdir()
+    (source / "file").write_bytes(b"same")
+    (destination / "file").write_bytes(b"same")
+    record.write_text("old audit")
+
+    with pytest.raises(FileExistsError, match="record already exists"):
+        portable_storage.verify_copy(source, destination, record)
 
 
 def test_copy_tree_recovers_record_after_post_rename_interruption(tmp_path):
@@ -381,6 +396,23 @@ def test_eject_check_acquires_the_root_training_guard(tmp_path, monkeypatch):
     assert str(tmp_path / "runtime" / ".rnnoise-operation.lock") in calls
 
 
+def test_eject_holds_the_operation_guard_through_diskutil(tmp_path, monkeypatch):
+    calls = []
+    (tmp_path / "runtime").mkdir()
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {})
+    monkeypatch.setattr(
+        portable_storage, "_eject_check_locked", lambda root, **kwargs: {"safe": True}
+    )
+    monkeypatch.setattr(
+        portable_storage.subprocess,
+        "run",
+        lambda args, check: calls.append((args, check)),
+    )
+
+    assert portable_storage.eject_volume(tmp_path) == {"safe": True}
+    assert calls == [(["/usr/sbin/diskutil", "eject", str(tmp_path)], True)]
+
+
 def test_stop_mlflow_acquires_startup_lock(tmp_path, monkeypatch):
     calls = []
     (tmp_path / "runtime").mkdir()
@@ -450,6 +482,34 @@ def test_eject_check_rejects_incomplete_checkpoint_manifest(tmp_path, monkeypatc
     monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
 
     with pytest.raises(RuntimeError, match="manifest is incomplete"):
+        portable_storage.eject_check(root)
+
+
+def test_eject_check_rejects_symlinked_checkpoint_payload(tmp_path, monkeypatch):
+    root = tmp_path
+    checkpoint = root / "experiments" / "active" / "trial" / "checkpoints" / "update-1"
+    checkpoint.mkdir(parents=True)
+    files = {}
+    for name in {
+        "model.safetensors",
+        "optimizer.safetensors",
+        "mlx-random-state.safetensors",
+        "trainer-state.json",
+    }:
+        payload = name.encode()
+        (checkpoint / name).write_bytes(payload)
+        files[name] = hashlib.sha256(payload).hexdigest()
+    external = tmp_path / "external-model"
+    external.write_bytes(b"model.safetensors")
+    (checkpoint / "model.safetensors").unlink()
+    (checkpoint / "model.safetensors").symlink_to(external)
+    portable_storage._json_write(
+        checkpoint / "manifest.json", {"format_version": 1, "files": files}
+    )
+    monkeypatch.setattr(portable_storage, "load_volume_config", lambda root: {"volume_uuid": "id", "minimum_free_bytes": 0})
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: None)
+
+    with pytest.raises(RuntimeError, match="differs from manifest"):
         portable_storage.eject_check(root)
 
 
