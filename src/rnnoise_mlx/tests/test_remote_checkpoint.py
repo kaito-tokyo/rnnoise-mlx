@@ -63,6 +63,29 @@ def test_upload_download_roundtrip_and_unique_attempts(tmp_path):
     assert (client.root / first / remote.COMPLETE).is_file()
 
 
+def test_download_follows_artifact_page_tokens(tmp_path):
+    client = Client(tmp_path / "server")
+    first = remote.upload_checkpoint(client, "run", checkpoint(tmp_path, 10), 10)
+    second = remote.upload_checkpoint(client, "run", checkpoint(tmp_path, 20), 20)
+    original = client.list_artifacts
+    calls = {}
+
+    def paged_list_artifacts(run_id, path, page_token=None):
+        entries = original(run_id, path)
+        if path == "checkpoints":
+            calls[path] = calls.get(path, 0) + 1
+            if page_token is None:
+                return type("Page", (list,), {"token": "next"})(entries[:1])
+            return type("Page", (list,), {"token": None})(entries[1:])
+        return entries
+
+    client.list_artifacts = paged_list_artifacts
+    destination = remote.download_checkpoint(client, "run", tmp_path / "restored")
+    assert json.loads((destination / "trainer-state.json").read_text())["update"] == 20
+    assert calls["checkpoints"] == 2
+    assert first != second
+
+
 def test_interrupted_upload_has_no_marker_and_is_not_selected(tmp_path):
     client = Client(tmp_path / "server")
     remote.upload_checkpoint(client, "run", checkpoint(tmp_path), 10)

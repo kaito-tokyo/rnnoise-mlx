@@ -87,22 +87,38 @@ def download_checkpoint(client, run_id: str, destination: Path, update: int | No
     return _download_checkpoint(client, run_id, destination, update)
 
 
+def _list_artifacts(client, run_id: str, path: str):
+    """Yield every artifact entry, following MLflow continuation tokens."""
+    page_token = None
+    while True:
+        if page_token is None:
+            page = client.list_artifacts(run_id, path)
+        else:
+            page = client.list_artifacts(run_id, path, page_token=page_token)
+        yield from page
+        page_token = getattr(page, "token", None)
+        if not page_token:
+            return
+
+
 def _download_checkpoint(client, run_id: str, destination: Path, update: int | None = None) -> Path:
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"checkpoint destination exists: {destination}")
     candidates = []
     with tempfile.TemporaryDirectory(prefix="rnnoise-markers-") as work:
-        for generation in client.list_artifacts(run_id, "checkpoints"):
+        for generation in _list_artifacts(client, run_id, "checkpoints"):
             match = re.fullmatch(r"checkpoints/update-(\d{8,})", generation.path)
             if not generation.is_dir or match is None:
                 continue
             number = int(match[1])
             if update is not None and number != update:
                 continue
-            for attempt in client.list_artifacts(run_id, generation.path):
+            for attempt in _list_artifacts(client, run_id, generation.path):
                 if not attempt.is_dir or not re.fullmatch(re.escape(generation.path) + r"/[0-9a-f]{32}", attempt.path):
                     continue
-                if f"{attempt.path}/{COMPLETE}" not in {a.path for a in client.list_artifacts(run_id, attempt.path)}:
+                if f"{attempt.path}/{COMPLETE}" not in {
+                    a.path for a in _list_artifacts(client, run_id, attempt.path)
+                }:
                     continue
                 with tempfile.TemporaryDirectory(dir=work) as marker_dir:
                     p = Path(client.download_artifacts(run_id, f"{attempt.path}/{COMPLETE}", marker_dir))
