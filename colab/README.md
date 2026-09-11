@@ -16,6 +16,7 @@ For example, from the repository root in WSL:
 
 ```sh
 ./colab/start_session.sh \
+  --auth adc \
   --session rnnoise-smoke \
   --gpu L4 \
   --mlflow-uri 'https://YOUR-WINDOWS-HOST.tailnet.ts.net/'
@@ -26,6 +27,10 @@ The key defaults to
 `--auth-key-file` when needed. It must be a restricted reusable, ephemeral,
 pre-approved key for `tag:colab`. The key, OAuth token, and SSH private key are
 machine-local secrets and must never be committed.
+
+The helper uses the Colab CLI `adc` authentication strategy by default. Set up
+ADC once with `gcloud auth application-default login`. Use `--auth oauth2` to
+select the Colab CLI's direct OAuth flow instead.
 
 Colab lacks the TUN device needed for kernel networking. Consequently,
 Tailscale runs in userspace mode and MLflow clients must use its local HTTP

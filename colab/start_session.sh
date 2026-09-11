@@ -8,6 +8,7 @@ Usage: colab/start_session.sh --session NAME --mlflow-uri HTTPS_URL [options]
 
 Options:
   --gpu TYPE             Request a Colab GPU, for example L4.
+  --auth TYPE             Colab auth strategy: adc or oauth2 (default: adc).
   --auth-key-file PATH   Defaults to ~/.config/rnnoise/tailscale-colab-authkey.
   --identity PATH        Defaults to ~/.ssh/colab_runtime_ed25519.
   --reuse                Do not create the named session first.
@@ -17,6 +18,7 @@ EOF
 session=""
 mlflow_uri=""
 gpu=""
+auth="adc"
 auth_key_file="$HOME/.config/rnnoise/tailscale-colab-authkey"
 identity="$HOME/.ssh/colab_runtime_ed25519"
 create=1
@@ -26,6 +28,7 @@ while (($#)); do
     --session) session=${2:?}; shift 2 ;;
     --mlflow-uri) mlflow_uri=${2:?}; shift 2 ;;
     --gpu) gpu=${2:?}; shift 2 ;;
+    --auth) auth=${2:?}; shift 2 ;;
     --auth-key-file) auth_key_file=${2:?}; shift 2 ;;
     --identity) identity=${2:?}; shift 2 ;;
     --reuse) create=0; shift ;;
@@ -35,20 +38,24 @@ while (($#)); do
 done
 
 [[ -n "$session" && -n "$mlflow_uri" ]] || { usage >&2; exit 2; }
+case "$auth" in
+  adc|oauth2) ;;
+  *) echo "Unsupported Colab auth strategy: $auth" >&2; exit 2 ;;
+esac
 mlflow_uri=${mlflow_uri%/}
 [[ -n "$mlflow_uri" ]] || { echo "MLflow URI must not be only slashes" >&2; exit 2; }
 [[ -r "$auth_key_file" ]] || { echo "Cannot read auth key: $auth_key_file" >&2; exit 1; }
 [[ -r "$identity" ]] || { echo "Cannot read SSH identity: $identity" >&2; exit 1; }
 
 if (( create )); then
-  args=(new --session "$session")
+  args=(--auth "$auth" new --session "$session")
   [[ -n "$gpu" ]] && args+=(--gpu "$gpu")
   colab "${args[@]}"
   stop_on_failure=1
   cleanup_session() {
     local status=$?
     if (( stop_on_failure )); then
-      colab stop --session "$session" >&2 || true
+      colab --auth "$auth" stop --session "$session" >&2 || true
     fi
     exit "$status"
   }
@@ -63,7 +70,7 @@ known_hosts="$known_hosts_dir/$session"
 if (( create )); then
   rm -f -- "$known_hosts"
 fi
-proxy_command="colab ssh --proxy-mode --session $(printf '%q' "$session") --identity $(printf '%q' "$identity")"
+proxy_command="colab --auth $(printf '%q' "$auth") ssh --proxy-mode --session $(printf '%q' "$session") --identity $(printf '%q' "$identity")"
 ssh_args=(
   -i "$identity"
   -o "ProxyCommand=$proxy_command"
@@ -102,5 +109,5 @@ cat <<EOF
 Ready: $session
 Use the same SSH ProxyCommand and set HTTP_PROXY and HTTPS_PROXY to http://127.0.0.1:1055
 inside the process that invokes MLflow. Stop the session with:
-  colab stop --session $session
+  colab --auth $auth stop --session $session
 EOF
