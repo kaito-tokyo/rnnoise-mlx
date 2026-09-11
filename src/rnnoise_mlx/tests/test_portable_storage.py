@@ -102,13 +102,14 @@ def test_machine_id_distinguishes_hosts_with_the_same_short_name(tmp_path, monke
     assert first.startswith("shared-")
 
 
-def test_coordination_locks_use_a_host_wide_directory(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "other-cache"))
+def test_coordination_locks_use_the_user_cache(tmp_path, monkeypatch):
+    cache = tmp_path / "user-cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
 
     path = portable_storage.coordination_lock_path(tmp_path, "operation")
 
-    assert path.parent == Path("/tmp")
-    assert stat.S_IMODE(path.stat().st_mode) == 0o660
+    assert path.parent == cache / "rnnoise-mlx" / "locks"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_operation_guard_revalidates_after_lock_acquisition(tmp_path, monkeypatch):
