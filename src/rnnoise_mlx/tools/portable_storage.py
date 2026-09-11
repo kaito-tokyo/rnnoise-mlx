@@ -76,7 +76,7 @@ def preflight(root: Path, expected_uuid: str = DEFAULT_UUID) -> dict[str, object
         )
     if info.get("MountPoint") != str(DEFAULT_ROOT):
         raise ValueError(f"storage mount point differs: {info.get('MountPoint')}")
-    if info.get("ReadOnly"):
+    if info.get("ReadOnlyVolume") or info.get("ReadOnlyMedia"):
         raise ValueError("storage volume is read-only")
     if info.get("WritableVolume") is False:
         raise ValueError("storage volume is not writable")
@@ -126,10 +126,19 @@ def registered_volume_for_paths(paths: list[Path]) -> Path | None:
     return None
 
 
+def coordination_lock_path(root: Path, name: str) -> Path:
+    """Use a lock outside a volume that may be ejected."""
+    cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    identity = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+    path = cache_root / "rnnoise-mlx" / "locks" / f"{identity}-{name}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 @contextmanager
 def volume_operation_guard(root: Path):
     """Exclude portable-volume writers while eject safety is being checked."""
-    path = root / "runtime" / ".rnnoise-operation.lock"
+    path = coordination_lock_path(root, "operation")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
@@ -229,7 +238,7 @@ def _remove_pid_if_owned(root: Path, pid: int | None) -> None:
 
 def start_mlflow(root: Path, port: int = 5000, timeout: float = 30.0) -> int:
     load_volume_config(root)
-    startup_lock = root / "runtime" / ".rnnoise-mlflow-start.lock"
+    startup_lock = coordination_lock_path(root, "mlflow-start")
     with startup_lock.open("a+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
         return _start_mlflow_locked(root, port, timeout)
@@ -308,7 +317,9 @@ def sqlite_integrity(database: Path) -> str:
         return "not-created"
     connection = sqlite3.connect(database)
     try:
-        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+        checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if checkpoint is not None and checkpoint[0] != 0:
+            raise RuntimeError("SQLite WAL checkpoint is busy")
         result = connection.execute("PRAGMA integrity_check").fetchone()
     finally:
         connection.close()
@@ -320,7 +331,7 @@ def sqlite_integrity(database: Path) -> str:
 
 def stop_mlflow(root: Path, timeout: float = 30.0) -> str:
     load_volume_config(root)
-    startup_lock = root / "runtime" / ".rnnoise-mlflow-start.lock"
+    startup_lock = coordination_lock_path(root, "mlflow-start")
     startup_lock.parent.mkdir(parents=True, exist_ok=True)
     with startup_lock.open("a+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
@@ -330,7 +341,10 @@ def stop_mlflow(root: Path, timeout: float = 30.0) -> str:
 def _stop_mlflow_locked(root: Path, timeout: float) -> str:
     pid = _running_pid(root)
     if pid is not None:
-        os.kill(pid, signal.SIGTERM)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
@@ -537,11 +551,11 @@ def _is_temporary_path(path: Path) -> bool:
 
 def eject_check(root: Path) -> dict[str, object]:
     load_volume_config(root)
-    startup_lock = root / "runtime" / ".rnnoise-mlflow-start.lock"
+    startup_lock = coordination_lock_path(root, "mlflow-start")
     startup_lock.parent.mkdir(parents=True, exist_ok=True)
     with startup_lock.open("a+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
-        training_guard = root / ".rnnoise-training.lock.guard"
+        training_guard = coordination_lock_path(root, "training")
         with training_guard.open("a+") as training_stream:
             fcntl.flock(training_stream, fcntl.LOCK_EX)
             with volume_operation_guard(root):
@@ -551,11 +565,11 @@ def eject_check(root: Path) -> dict[str, object]:
 def eject_volume(root: Path) -> dict[str, object]:
     """Verify and eject while excluding new portable-volume operations."""
     load_volume_config(root)
-    startup_lock = root / "runtime" / ".rnnoise-mlflow-start.lock"
+    startup_lock = coordination_lock_path(root, "mlflow-start")
     startup_lock.parent.mkdir(parents=True, exist_ok=True)
     with startup_lock.open("a+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
-        training_guard = root / ".rnnoise-training.lock.guard"
+        training_guard = coordination_lock_path(root, "training")
         with training_guard.open("a+") as training_stream:
             fcntl.flock(training_stream, fcntl.LOCK_EX)
             with volume_operation_guard(root):
@@ -656,7 +670,7 @@ def display_result(result: object) -> object:
             "volume_uuid": result.get("VolumeUUID"),
             "mount_point": result.get("MountPoint"),
             "filesystem": result.get("FilesystemType"),
-            "writable": result.get("WritableVolume", not result.get("ReadOnly", False)),
+            "writable": not (result.get("ReadOnlyVolume") or result.get("ReadOnlyMedia")),
         }
     summary = result.get("summary")
     if isinstance(summary, dict) and "records" in summary:

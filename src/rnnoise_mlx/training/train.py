@@ -51,7 +51,11 @@ def _recover_initial_evaluation(output: Path, existing_run) -> dict | None:
 
 def _register_training_lock(*paths: Path | None) -> None:
     """Prevent eject-check from approving a volume with a live trainer."""
-    from rnnoise_mlx.tools.portable_storage import DEFAULT_ROOT, load_volume_config
+    from rnnoise_mlx.tools.portable_storage import (
+        DEFAULT_ROOT,
+        coordination_lock_path,
+        load_volume_config,
+    )
 
     root = Path(os.environ.get("RNNOISE_MLX_STORAGE_ROOT", DEFAULT_ROOT)).expanduser().resolve()
     resolved_paths = [path.resolve() for path in paths if path is not None]
@@ -59,7 +63,7 @@ def _register_training_lock(*paths: Path | None) -> None:
         return
     load_volume_config(root)
     lock = root / ".rnnoise-training.lock"
-    guard = root / ".rnnoise-training.lock.guard"
+    guard = coordination_lock_path(root, "training")
     # Create exclusively so concurrent trainers cannot use the volume unsafely.
     with guard.open("a+") as guard_stream:
         fcntl.flock(guard_stream, fcntl.LOCK_EX)

@@ -36,6 +36,19 @@ def test_preflight_rejects_wrong_uuid(monkeypatch):
         portable_storage.preflight(portable_storage.DEFAULT_ROOT)
 
 
+def test_preflight_rejects_read_only_volume(monkeypatch):
+    monkeypatch.setattr(Path, "is_dir", lambda self: True)
+    monkeypatch.setattr(Path, "resolve", lambda self: self)
+    monkeypatch.setattr(
+        portable_storage,
+        "disk_info",
+        lambda root: {**_disk_info(), "ReadOnlyVolume": True},
+    )
+
+    with pytest.raises(ValueError, match="read-only"):
+        portable_storage.preflight(portable_storage.DEFAULT_ROOT)
+
+
 def test_preflight_rejects_alternate_mount():
     with pytest.raises(ValueError, match="mounted exactly"):
         portable_storage.preflight(Path("/Volumes/rnnoise-mlx-train 1"))
@@ -392,8 +405,8 @@ def test_eject_check_acquires_the_root_training_guard(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="incomplete temporary"):
         portable_storage.eject_check(tmp_path)
 
-    assert str(tmp_path / ".rnnoise-training.lock.guard") in calls
-    assert str(tmp_path / "runtime" / ".rnnoise-operation.lock") in calls
+    assert str(portable_storage.coordination_lock_path(tmp_path, "training")) in calls
+    assert str(portable_storage.coordination_lock_path(tmp_path, "operation")) in calls
 
 
 def test_eject_holds_the_operation_guard_through_diskutil(tmp_path, monkeypatch):
@@ -424,7 +437,7 @@ def test_stop_mlflow_acquires_startup_lock(tmp_path, monkeypatch):
     )
 
     assert portable_storage.stop_mlflow(tmp_path) == "ok"
-    assert str(tmp_path / "runtime" / ".rnnoise-mlflow-start.lock") in calls
+    assert str(portable_storage.coordination_lock_path(tmp_path, "mlflow-start")) in calls
 
 
 def test_stop_mlflow_reaps_an_owned_child(tmp_path, monkeypatch):
@@ -434,6 +447,39 @@ def test_stop_mlflow_reaps_an_owned_child(tmp_path, monkeypatch):
     monkeypatch.setattr(portable_storage, "sqlite_integrity", lambda database: "ok")
 
     assert portable_storage._stop_mlflow_locked(tmp_path, timeout=1) == "ok"
+
+
+def test_stop_mlflow_accepts_a_vanished_pid(tmp_path, monkeypatch):
+    monkeypatch.setattr(portable_storage, "_running_pid", lambda root: 42)
+    monkeypatch.setattr(
+        portable_storage.os,
+        "kill",
+        lambda pid, signal: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+    monkeypatch.setattr(portable_storage.os, "waitpid", lambda pid, flags: (pid, 0))
+    monkeypatch.setattr(portable_storage, "sqlite_integrity", lambda database: "ok")
+
+    assert portable_storage._stop_mlflow_locked(tmp_path, timeout=1) == "ok"
+
+
+def test_sqlite_integrity_rejects_busy_wal_checkpoint(tmp_path, monkeypatch):
+    database = tmp_path / "mlflow.db"
+    database.touch()
+
+    class Connection:
+        def execute(self, statement):
+            class Cursor:
+                def fetchone(self):
+                    return (1, 0, 0)
+            return Cursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(portable_storage.sqlite3, "connect", lambda path: Connection())
+
+    with pytest.raises(RuntimeError, match="WAL checkpoint is busy"):
+        portable_storage.sqlite_integrity(database)
 
 
 def test_eject_check_rejects_symlinked_active_experiment(tmp_path, monkeypatch):
