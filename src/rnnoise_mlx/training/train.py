@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from functools import partial
 import json
 import os
@@ -27,6 +27,40 @@ from .tracking import (
     initial_evaluation_from_run,
     validate_tracking_target,
 )
+
+
+@dataclass
+class TrainConfig:
+    """Configuration for one training run, independent of CLI parsing."""
+
+    features: str
+    output: str
+    batch_size: int = 8
+    sequence_length: int = 2000
+    epochs: int = 200
+    max_updates: int | None = None
+    learning_rate: float = 1e-3
+    lr_decay: float = 5e-5
+    gamma: float = 0.25
+    seed: int = 0
+    eval_features: str | None = None
+    training_chunk_length: int = 200
+    no_compile: bool = False
+    no_prefetch: bool = False
+    sync_eval: bool = False
+    stateful_tbptt: bool = False
+    two_segment_tbptt: str | None = None
+    segmented_tbptt_length: int | None = None
+    segmented_tbptt_state: str = "carry"
+    equalize_reset_targets: bool = False
+    mlflow_tracking_uri: str = ""
+    mlflow_experiment: str = ""
+    mlflow_run_name: str | None = None
+    mlflow_run_id: str | None = None
+    checkpoint_every: int = 32
+    mlflow_log_checkpoints: bool = True
+    provenance_artifact: list[Path] | None = None
+    resume_from: Path | None = None
 
 
 def _feature_manifest(path: str | Path) -> Path | None:
@@ -67,7 +101,7 @@ def _validate_downloaded_checkpoint_run(checkpoint: Path, run_id: str | None) ->
         raise ValueError("downloaded checkpoint differs from completion marker")
 
 
-def main():
+def parse_args(argv=None) -> TrainConfig:
     parser = argparse.ArgumentParser()
     parser.add_argument("features")
     parser.add_argument("output")
@@ -135,7 +169,7 @@ def main():
         type=Path,
         help="complete checkpoint directory to resume from",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.two_segment_tbptt and args.segmented_tbptt_length:
         parser.error("select only one segmented TBPTT interface")
@@ -151,6 +185,14 @@ def main():
     elif args.mlflow_run_id is None:
         parser.error("--resume-from requires --mlflow-run-id")
 
+    args.provenance_artifact = list(args.provenance_artifact)
+    return TrainConfig(**vars(args))
+
+
+def train(args: TrainConfig):
+    """Run training from a configuration object without parsing CLI arguments."""
+    if args.provenance_artifact is None:
+        args.provenance_artifact = []
     output = Path(args.output)
     existing_run = validate_tracking_target(
         args.mlflow_tracking_uri, args.mlflow_experiment, args.mlflow_run_id
@@ -300,7 +342,7 @@ def main():
     if segment_length and (
         segment_length <= 4 or args.sequence_length % segment_length != 0
     ):
-        parser.error("segmented TBPTT length must be >4 and divide --sequence-length")
+        raise ValueError("segmented TBPTT length must be >4 and divide --sequence-length")
 
     def segmented_objective(model, features, gain, vad):
         weighted_loss = 0
@@ -611,7 +653,8 @@ def main():
     }
     (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
     tracker.complete(summary, output)
-
+def main(argv=None):
+    return train(parse_args(argv))
 
 if __name__ == "__main__":
     main()

@@ -69,6 +69,28 @@ updates, records initial/trained/reloaded evaluation, and uploads the final
 machine-specific values outside the repository and pass them through the three
 MLflow CLI options.
 
+The same training core is available to Python callers without constructing a
+CLI argument vector:
+
+```python
+from rnnoise_mlx.training import TrainConfig, train
+
+train(TrainConfig(
+    features="data/features/train.f32",
+    output="runs/notebook-run",
+    eval_features="data/features/eval.f32",
+    max_updates=320,
+    segmented_tbptt_length=500,
+    segmented_tbptt_state="carry",
+    mlflow_tracking_uri=MLFLOW_TRACKING_URI,
+    mlflow_experiment=MLFLOW_EXPERIMENT,
+    mlflow_run_name="notebook-run",
+))
+```
+
+`parse_args()` and `main()` remain the CLI adapter; `train(TrainConfig(...))`
+contains the reusable training operation for notebooks and other callers.
+
 Training writes a complete checkpoint at every `--checkpoint-every` updates
 (32 by default) under `OUTPUT/checkpoints/update-NNNNNNNN/`. Each checkpoint
 contains model weights, AdamW state, MLX random state, the data cursor, elapsed
