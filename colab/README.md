@@ -10,26 +10,26 @@ pipx inject google-colab-cli -r requirements-colab-cli-lock.txt
 
 The lock deliberately pins `jupyter-kernel-client==0.15.0`; newer 1.0.x
 releases do not expose the `KernelClient` API expected by Colab CLI 0.7.0.
-Inside the GPU VM, install the CUDA MLX pair from the runtime lock:
+Inside the GPU VM, install the project and its CUDA MLX dependencies from
+`pyproject.toml`:
 
 ```sh
-python -m pip install -r requirements-colab-lock.txt
+python -m pip install -e /content/rnnoise-mlx
 ```
 
-These helpers run an ephemeral Colab GPU runtime from WSL. WSL is configured
-in mirror mode, so the remote training process uses the Windows MLflow server
-at `http://localhost:5000`.
+These helpers run an ephemeral Colab GPU runtime from WSL. The training code
+is imported directly from the cloned repository, so editable installation is
+intentional for interactive experiments.
 
 `start_session.sh`:
 
 1. creates a Colab runtime;
-2. creates an SSH reverse forward from Colab `localhost:5000` to WSL
- `127.0.0.1:5000`; and
-3. checks the forwarded MLflow `/health` endpoint.
+2. attaches an SSH session to the runtime; and
+3. keeps that session alive while interactive work is in progress.
 
-The command remains attached to the remote shell so the SSH reverse forward
-stays alive. Run the training command in that shell; exiting it closes the
-forward. Stop the Colab session separately when finished.
+The command remains attached to the remote shell for interactive work. Run
+the training command in that shell; exiting it closes the SSH session. Stop
+the Colab session separately when finished.
 
 Example:
 
@@ -39,10 +39,6 @@ Example:
   --session rnnoise-smoke \
   --gpu L4
 ```
-
-The default MLflow URI is `http://localhost:5000`. The helper keeps the SSH
-reverse forward alive while its remote shell is open, so remote training
-processes can use that URI without a separate network service.
 
 The helper uses the Colab CLI `adc` authentication strategy by default. Set up
 ADC once with:

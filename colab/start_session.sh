@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run from WSL. Creates a Colab session and forwards its localhost to WSL.
+# Run from WSL. Creates a Colab session and opens an SSH shell.
 set -euo pipefail
 
 usage() {
@@ -7,7 +7,6 @@ usage() {
 Usage: colab/start_session.sh --session NAME [options]
 
 Options:
-  --mlflow-uri URL        Defaults to http://localhost:5000.
   --gpu TYPE              Request a Colab GPU, for example L4.
   --auth TYPE             Colab auth strategy: adc or oauth2 (default: adc).
   --identity PATH         Defaults to ~/.ssh/colab_runtime_ed25519.
@@ -16,7 +15,6 @@ EOF
 }
 
 session=""
-mlflow_uri="http://localhost:5000"
 gpu=""
 auth="adc"
 identity="$HOME/.ssh/colab_runtime_ed25519"
@@ -24,7 +22,6 @@ create=1
 while (($#)); do
   case "$1" in
     --session) session=${2:?}; shift 2 ;;
-    --mlflow-uri) mlflow_uri=${2:?}; shift 2 ;;
     --gpu) gpu=${2:?}; shift 2 ;;
     --auth) auth=${2:?}; shift 2 ;;
     --identity) identity=${2:?}; shift 2 ;;
@@ -40,19 +37,6 @@ case "$auth" in
   *) echo "Unsupported Colab auth strategy: $auth" >&2; exit 2 ;;
 esac
 [[ -r "$identity" ]] || { echo "Cannot read SSH identity: $identity" >&2; exit 1; }
-mlflow_uri=${mlflow_uri%/}
-[[ -n "$mlflow_uri" ]] || { echo "MLflow URI must not be only slashes" >&2; exit 2; }
-if [[ "$mlflow_uri" =~ ^(https?)://(localhost|127\.0\.0\.1)(:([0-9]+))?(/.*)?$ ]]; then
-  mlflow_scheme=${BASH_REMATCH[1]}
-  mlflow_port=${BASH_REMATCH[4]}
-  if [[ -z "$mlflow_port" ]]; then
-    [[ "$mlflow_scheme" == https ]] && mlflow_port=443 || mlflow_port=80
-  fi
-else
-  echo "MLflow URI must use localhost or 127.0.0.1: $mlflow_uri" >&2
-  exit 2
-fi
-
 if (( create )); then
   args=(--auth "$auth" new --session "$session")
   [[ -n "$gpu" ]] && args+=(--gpu "$gpu")
@@ -84,19 +68,9 @@ ssh_options=(
   -o StrictHostKeyChecking=accept-new
 )
 ssh_host=root@colab-runtime
-
-remote_command='set -euo pipefail
-: "${MLFLOW_TRACKING_URI:?Set MLFLOW_TRACKING_URI}"
-health_status=$(curl --fail --silent --show-error --max-time 20 \
-  --output /dev/null --write-out "%{http_code}" "$MLFLOW_TRACKING_URI/health")
-[[ "$health_status" == 200 ]] || { echo "MLflow health check returned HTTP $health_status" >&2; exit 1; }
-echo "MLflow is ready at $MLFLOW_TRACKING_URI"
-exec bash -l'
-remote_env="MLFLOW_TRACKING_URI=$(printf '%q' "$mlflow_uri")"
 ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-  -R "$mlflow_port:127.0.0.1:$mlflow_port" \
   "${ssh_options[@]}" "$ssh_host" \
-  "$remote_env bash -c $(printf '%q' "$remote_command")"
+  'exec bash -l'
 
 stop_on_failure=0
 trap - EXIT
