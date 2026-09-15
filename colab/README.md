@@ -31,6 +31,16 @@ The command remains attached to the remote shell for interactive work. Run
 the training command in that shell; exiting it closes the SSH session. Stop
 the Colab session separately when finished.
 
+For CPU sampling, run the standalone training helper through `py-spy` from
+the SSH shell. This keeps the profiler outside the notebook kernel:
+
+```sh
+python -m pip install --user py-spy
+py-spy record --native --output /content/profile.svg -- \
+  python /content/rnnoise-mlx/colab/profile_train.py \
+  --batch-size 2 --max-updates 20
+```
+
 Example:
 
 ```sh
