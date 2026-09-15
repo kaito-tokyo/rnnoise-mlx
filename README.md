@@ -30,10 +30,7 @@ artifacts.
   --max-updates 320 \
   --segmented-tbptt-length 100 \
   --segmented-tbptt-state carry \
-  --eval-features data/features/eval.f32 \
-  --mlflow-tracking-uri "$MLFLOW_TRACKING_URI" \
-  --mlflow-experiment "$MLFLOW_EXPERIMENT" \
-  --mlflow-run-name smoke
+  --eval-features data/features/eval.f32
 ```
 
 Each `features.f32` frame matches upstream `dump_features`: 98 float32 values
@@ -52,28 +49,32 @@ frames.
   --segmented-tbptt-length 500 \
   --segmented-tbptt-state carry \
   --eval-features data/features/eval.f32 \
-  --max-updates 320 \
-  --mlflow-tracking-uri "$MLFLOW_TRACKING_URI" \
-  --mlflow-experiment "$MLFLOW_EXPERIMENT" \
-  --mlflow-run-name promoted-500
+  --max-updates 320
 ```
 
 The current corpus-cleaning and promoted-training parameters are documented in
 [the CJK two-stage procedure](docs/cjk-two-stage-training.md).
 
-The training command requires an MLflow tracking URI and experiment, plus either
-a run name for a new run or a run ID for an existing run.
-It checks the server before evaluation or optimization, logs loss every ten
-updates, records initial/trained/reloaded evaluation, and uploads the final
-`model.safetensors`, `training.json`, and every complete checkpoint. Keep
-machine-specific values outside the repository and pass them through the three
-MLflow CLI options.
+The training command records local checkpoints, evaluation results, and
+training history. Progress can be consumed directly by notebook callers with
+`progress_callback`.
 
 The same training core is available to Python callers without constructing a
 CLI argument vector:
 
 ```python
-from rnnoise_mlx.training import TrainConfig, train
+from rnnoise_mlx.training import (
+    TrainConfig,
+    TrainingCheckpoint,
+    TrainingProgress,
+    train,
+)
+
+def on_progress(event):
+    if isinstance(event, TrainingProgress) and event.update % 10 == 0:
+        print(event)
+    elif isinstance(event, TrainingCheckpoint):
+        print(f"checkpoint: {event.path}")
 
 train(TrainConfig(
     features="data/features/train.f32",
@@ -82,10 +83,7 @@ train(TrainConfig(
     max_updates=320,
     segmented_tbptt_length=500,
     segmented_tbptt_state="carry",
-    mlflow_tracking_uri=MLFLOW_TRACKING_URI,
-    mlflow_experiment=MLFLOW_EXPERIMENT,
-    mlflow_run_name="notebook-run",
-))
+), progress_callback=on_progress)
 ```
 
 `parse_args()` and `main()` remain the CLI adapter; `train(TrainConfig(...))`
@@ -98,15 +96,11 @@ counters, and training history. Resume with:
 
 ```sh
 python -m rnnoise_mlx.training.train ... \
-  --mlflow-run-id EXISTING_RUN_ID \
   --resume-from OUTPUT/checkpoints/update-00000500
 ```
 
-Pass the original MLflow run ID when continuing the same logical training run.
-This retains the existing run name and appends metrics and artifacts to that run.
-`--resume-from` and `--mlflow-run-id` must be specified together. Omit both when
-a restart should be tracked as a separate trial. Resumed runs retain the original
-initial evaluation instead of logging the checkpoint evaluation again at step 0.
+Resumed runs use the state stored in the checkpoint and do not require an
+external tracking service.
 
 Checkpoints are committed only at batch boundaries, so prefetched input cannot
 move the saved data cursor past the next batch. The legacy `--stateful-tbptt`

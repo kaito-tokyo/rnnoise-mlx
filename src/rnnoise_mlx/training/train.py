@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from functools import partial
@@ -22,11 +23,6 @@ from .checkpoint import _feature_identity, load_checkpoint, save_checkpoint
 from .evaluate import evaluate
 from .loss import rnnoise_loss, rnnoise_loss_aligned
 from .model import ModelConfig, RNNoise
-from .tracking import (
-    MLflowTracker,
-    initial_evaluation_from_run,
-    validate_tracking_target,
-)
 
 
 @dataclass
@@ -53,52 +49,34 @@ class TrainConfig:
     segmented_tbptt_length: int | None = None
     segmented_tbptt_state: str = "carry"
     equalize_reset_targets: bool = False
-    mlflow_tracking_uri: str = ""
-    mlflow_experiment: str = ""
-    mlflow_run_name: str | None = None
-    mlflow_run_id: str | None = None
     checkpoint_every: int = 32
-    mlflow_log_checkpoints: bool = True
-    provenance_artifact: list[Path] | None = None
     resume_from: Path | None = None
 
 
-def _feature_manifest(path: str | Path) -> Path | None:
-    feature = Path(path)
-    candidates = (feature.with_suffix(".manifest.json"), feature.parent / "manifest.json")
-    return next((candidate for candidate in candidates if candidate.is_file()), None)
+@dataclass(frozen=True)
+class TrainingProgress:
+    """Materialized progress for one completed optimizer update."""
+
+    update: int
+    epoch: int
+    loss: float
+    learning_rate: float
+    processed_frames: int
 
 
-def _recover_initial_evaluation(output: Path, existing_run) -> dict | None:
-    summary_path = output / "training.json"
-    if summary_path.is_file():
-        summary = json.loads(summary_path.read_text())
-        if summary.get("initial_evaluation") is not None:
-            return summary["initial_evaluation"]
-    return initial_evaluation_from_run(existing_run) if existing_run is not None else None
+@dataclass(frozen=True)
+class TrainingCheckpoint:
+    """Notification emitted after a checkpoint is durably written."""
+
+    update: int
+    path: Path
+    next_epoch: int
+    next_batch: int
+    processed_frames: int
+    elapsed_seconds: float
 
 
-def _validate_downloaded_checkpoint_run(checkpoint: Path, run_id: str | None) -> None:
-    marker = checkpoint / "complete.json"
-    if marker.is_symlink() or (marker.exists() and not marker.is_file()):
-        raise ValueError(f"invalid downloaded checkpoint marker: {marker}")
-    if not marker.exists():
-        return
-    try:
-        metadata = json.loads(marker.read_text())
-        marker_run_id = metadata["run_id"]
-        update = int(metadata["update"])
-        manifest_sha256 = str(metadata["manifest_sha256"])
-        if metadata.get("format_version") != 1:
-            raise ValueError
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        raise ValueError(f"invalid downloaded checkpoint marker: {marker}") from None
-    if marker_run_id != run_id:
-        raise ValueError("downloaded checkpoint run_id does not match --mlflow-run-id")
-    from rnnoise_mlx.tools.mlflow_checkpoint import verify_checkpoint
-
-    if verify_checkpoint(checkpoint, update) != manifest_sha256:
-        raise ValueError("downloaded checkpoint differs from completion marker")
+TrainingEvent = TrainingProgress | TrainingCheckpoint
 
 
 def parse_args(argv=None) -> TrainConfig:
@@ -140,30 +118,7 @@ def parse_args(argv=None) -> TrainConfig:
         "--segmented-tbptt-state", choices=("carry", "reset"), default="carry"
     )
     parser.add_argument("--equalize-reset-targets", action="store_true")
-    parser.add_argument("--mlflow-tracking-uri", required=True)
-    parser.add_argument("--mlflow-experiment", required=True)
-    parser.add_argument("--mlflow-run-name")
-    parser.add_argument(
-        "--mlflow-run-id",
-        help="resume logging to an existing MLflow run while retaining its name",
-    )
     parser.add_argument("--checkpoint-every", type=int, default=32)
-    parser.add_argument(
-        "--mlflow-log-checkpoints",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="save verified checkpoints to MLflow (default: enabled)",
-    )
-    parser.add_argument(
-        "--provenance-artifact",
-        action="append",
-        type=Path,
-        default=[],
-        help=(
-            "small data-selection manifest or configuration to upload to MLflow; "
-            "repeat for multiple files"
-        ),
-    )
     parser.add_argument(
         "--resume-from",
         type=Path,
@@ -177,33 +132,21 @@ def parse_args(argv=None) -> TrainConfig:
         parser.error("segmented TBPTT and --stateful-tbptt are mutually exclusive")
     if args.checkpoint_every <= 0:
         parser.error("--checkpoint-every must be positive")
-    if args.resume_from is None:
-        if args.mlflow_run_id is not None:
-            parser.error("--mlflow-run-id requires --resume-from")
-        if args.mlflow_run_name is None:
-            parser.error("--mlflow-run-name is required for a new run")
-    elif args.mlflow_run_id is None:
-        parser.error("--resume-from requires --mlflow-run-id")
-
-    args.provenance_artifact = list(args.provenance_artifact)
     return TrainConfig(**vars(args))
 
 
-def train(args: TrainConfig):
-    """Run training from a configuration object without parsing CLI arguments."""
-    if args.provenance_artifact is None:
-        args.provenance_artifact = []
+def train(
+    args: TrainConfig,
+    progress_callback: Callable[[TrainingEvent], None] | None = None,
+):
+    """Run training and optionally report progress and checkpoint events.
+
+    ``progress_callback`` receives a :class:`TrainingProgress` once per update
+    after its loss is materialized by MLX and a :class:`TrainingCheckpoint`
+    after each checkpoint is written. Exceptions raised by the callback are
+    propagated so callers can stop a run when progress handling fails.
+    """
     output = Path(args.output)
-    existing_run = validate_tracking_target(
-        args.mlflow_tracking_uri, args.mlflow_experiment, args.mlflow_run_id
-    )
-    provenance_artifacts = list(args.provenance_artifact)
-    for feature_path in (Path(args.features), args.eval_features):
-        if feature_path is None:
-            continue
-        manifest = _feature_manifest(feature_path)
-        if manifest is not None:
-            provenance_artifacts.append(manifest)
     verified_feature_identity = _feature_identity(vars(args))
     verified_evaluation_feature_identity = _feature_identity(
         vars(args), "eval_features"
@@ -228,7 +171,6 @@ def train(args: TrainConfig):
     elapsed_before_resume = 0.0
     initial_evaluation = None
     if args.resume_from:
-        _validate_downloaded_checkpoint_run(args.resume_from, args.mlflow_run_id)
         restored = load_checkpoint(
             args.resume_from.resolve(),
             model,
@@ -246,13 +188,6 @@ def train(args: TrainConfig):
         elapsed_before_resume = float(restored["elapsed_seconds"])
         if "initial_evaluation" in restored:
             initial_evaluation = restored["initial_evaluation"]
-        elif args.eval_features is not None:
-            initial_evaluation = _recover_initial_evaluation(output, existing_run)
-            if initial_evaluation is None:
-                raise ValueError(
-                    "legacy checkpoint initial evaluation is unavailable from "
-                    "training.json and MLflow"
-                )
         print(
             json.dumps({"resumed_from": str(args.resume_from), "update": update}),
             flush=True,
@@ -270,20 +205,6 @@ def train(args: TrainConfig):
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
 
-    tracker_parameters = {**vars(args), "resume_update": update if args.resume_from else 0}
-    tracker = MLflowTracker(
-        args.mlflow_tracking_uri,
-        args.mlflow_experiment,
-        args.mlflow_run_name,
-        args.mlflow_run_id,
-        output.resolve(),
-        tracker_parameters,
-        provenance_artifacts,
-    )
-    print(json.dumps({"mlflow_run_id": tracker.run_id}), flush=True)
-    (output / "mlflow-run.json").write_text(
-        json.dumps({"run_id": tracker.run_id}, indent=2) + "\n"
-    )
     eval_dataset = FeatureDataset(args.eval_features, args.sequence_length) if args.eval_features else None
     if args.resume_from is None:
         initial_evaluation = (
@@ -291,7 +212,6 @@ def train(args: TrainConfig):
             if eval_dataset
             else None
         )
-        tracker.log_evaluation("initial", initial_evaluation, 0)
     if stop_requested:
         if args.resume_from is None:
             checkpoint = save_checkpoint(
@@ -310,8 +230,6 @@ def train(args: TrainConfig):
                 feature_identity=verified_feature_identity,
                 evaluation_feature_identity=verified_evaluation_feature_identity,
             )
-            if args.mlflow_log_checkpoints:
-                tracker.log_checkpoint(checkpoint, update)
         summary = {
             "updates": update,
             "stop_requested": True,
@@ -320,7 +238,6 @@ def train(args: TrainConfig):
             "history": history,
         }
         (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
-        tracker.pause(summary, output)
         return
 
     def objective(model, features, gain, vad):
@@ -464,15 +381,18 @@ def train(args: TrainConfig):
                 "loss": float(pending_loss.item()),
             }
             history.append(record)
+            if progress_callback is not None:
+                progress_callback(
+                    TrainingProgress(
+                        update=pending_update,
+                        epoch=pending_epoch,
+                        loss=record["loss"],
+                        learning_rate=learning_rate(pending_update),
+                        processed_frames=pending_frames,
+                    )
+                )
             if pending_update % 10 == 0:
                 print(json.dumps(record), flush=True)
-                tracker.log_training(
-                    pending_update,
-                    pending_epoch,
-                    record["loss"],
-                    learning_rate(pending_update),
-                    pending_frames,
-                )
         pending_losses.clear()
 
     checkpoint_due = False
@@ -496,8 +416,17 @@ def train(args: TrainConfig):
             feature_identity=verified_feature_identity,
             evaluation_feature_identity=verified_evaluation_feature_identity,
         )
-        if args.mlflow_log_checkpoints:
-            tracker.log_checkpoint(checkpoint, update)
+        if progress_callback is not None:
+            progress_callback(
+                TrainingCheckpoint(
+                    update=update,
+                    path=checkpoint,
+                    next_epoch=next_epoch,
+                    next_batch=next_batch,
+                    processed_frames=processed_frames,
+                    elapsed_seconds=elapsed_before_resume + time.monotonic() - started,
+                )
+            )
 
     for epoch in range(resume_epoch, args.epochs + 1):
         stop_checkpoint_committed = False
@@ -609,7 +538,6 @@ def train(args: TrainConfig):
             "history": history,
         }
         (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
-        tracker.pause(summary, output)
         return
 
     model.save(str(output / "model.safetensors"))
@@ -626,7 +554,6 @@ def train(args: TrainConfig):
             "history": history,
         }
         (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
-        tracker.pause(summary, output)
         return
     summary = {
         "updates": update,
@@ -652,7 +579,7 @@ def train(args: TrainConfig):
         "history": history,
     }
     (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
-    tracker.complete(summary, output)
+    return summary
 def main(argv=None):
     return train(parse_args(argv))
 
