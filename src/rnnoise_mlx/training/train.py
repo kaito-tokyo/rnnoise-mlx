@@ -43,7 +43,8 @@ class TrainConfig:
     training_chunk_length: int = 200
     no_compile: bool = False
     no_prefetch: bool = False
-    sync_eval: bool = False
+    # Retained for checkpoint/config compatibility; training is always synchronous.
+    sync_eval: bool = True
     stateful_tbptt: bool = False
     two_segment_tbptt: str | None = None
     segmented_tbptt_length: int | None = None
@@ -95,7 +96,6 @@ def parse_args(argv=None) -> TrainConfig:
     parser.add_argument("--training-chunk-length", type=int, default=200)
     parser.add_argument("--no-compile", action="store_true")
     parser.add_argument("--no-prefetch", action="store_true")
-    parser.add_argument("--sync-eval", action="store_true")
     parser.add_argument(
         "--stateful-tbptt",
         action="store_true",
@@ -471,10 +471,7 @@ def train(
                     else features.shape[1]
                 )
                 pending_losses.append((update, epoch, processed_frames, loss))
-                if args.sync_eval:
-                    mx.eval(model.state, optimizer.state, loss)
-                else:
-                    mx.async_eval(model.state, optimizer.state, loss)
+                mx.eval(model.state, optimizer.state, loss)
                 if len(pending_losses) >= 10:
                     collect_pending()
                 if update % 32 == 0:
@@ -564,7 +561,7 @@ def train(
         "frames_per_second": processed_frames / training_elapsed,
         "audio_seconds_per_second": processed_frames * 0.01 / training_elapsed,
         "compiled": not args.no_compile,
-        "async_eval": not args.sync_eval,
+        "async_eval": False,
         "prefetch_batches": 0 if args.no_prefetch else 1,
         "training_chunk_length": args.training_chunk_length,
         "stateful_tbptt": args.stateful_tbptt,
