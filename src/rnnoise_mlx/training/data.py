@@ -18,7 +18,7 @@ class FeatureDataset:
             raise ValueError("sequence_length must be at least 5")
         self.sequence_length = sequence_length
         if path.endswith(".npy"):
-            data = mx.load(path)
+            data = mx.load(path, stream=mx.gpu)
             if data.ndim != 3 or data.shape[1:] != (sequence_length, FRAME_DIM):
                 raise ValueError(
                     "NumPy feature file must have shape "
@@ -32,7 +32,8 @@ class FeatureDataset:
             self.sequence_count = frames // sequence_length
             usable = self.sequence_count * sequence_length * FRAME_DIM
             self.data = mx.array(
-                raw[:usable].reshape(self.sequence_count, sequence_length, FRAME_DIM)
+                raw[:usable].reshape(self.sequence_count, sequence_length, FRAME_DIM),
+                stream=mx.gpu,
             )
         if self.sequence_count == 0:
             raise ValueError("feature file contains no complete sequence")
