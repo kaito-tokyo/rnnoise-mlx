@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from functools import partial
 import json
@@ -42,7 +41,6 @@ class TrainConfig:
     eval_features: str | None = None
     training_chunk_length: int = 200
     no_compile: bool = False
-    no_prefetch: bool = False
     # Retained for checkpoint/config compatibility; training is always synchronous.
     sync_eval: bool = True
     stateful_tbptt: bool = False
@@ -95,7 +93,6 @@ def parse_args(argv=None) -> TrainConfig:
     parser.add_argument("--eval-features")
     parser.add_argument("--training-chunk-length", type=int, default=200)
     parser.add_argument("--no-compile", action="store_true")
-    parser.add_argument("--no-prefetch", action="store_true")
     parser.add_argument(
         "--stateful-tbptt",
         action="store_true",
@@ -356,19 +353,7 @@ def train(
                 next(batches)
             except StopIteration as error:
                 raise ValueError("checkpoint batch cursor is outside the dataset") from error
-        if args.no_prefetch:
-            yield from batches
-            return
-        iterator = iter(batches)
-        sentinel = object()
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="rnnoise-data") as executor:
-            future = executor.submit(next, iterator, sentinel)
-            while True:
-                batch = future.result()
-                if batch is sentinel:
-                    break
-                future = executor.submit(next, iterator, sentinel)
-                yield batch
+        yield from batches
 
     def collect_pending():
         if not pending_losses:
@@ -562,7 +547,6 @@ def train(
         "audio_seconds_per_second": processed_frames * 0.01 / training_elapsed,
         "compiled": not args.no_compile,
         "async_eval": False,
-        "prefetch_batches": 0 if args.no_prefetch else 1,
         "training_chunk_length": args.training_chunk_length,
         "stateful_tbptt": args.stateful_tbptt,
         "two_segment_tbptt": args.two_segment_tbptt,

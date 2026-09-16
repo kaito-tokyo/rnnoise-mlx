@@ -90,7 +90,7 @@ def test_epoch_end_saves_checkpoint_and_respects_upload_option(tmp_path, monkeyp
         "train", str(feature), str(output), "--batch-size", "2",
         "--sequence-length", "16", "--training-chunk-length", "16",
         "--epochs", "1", "--checkpoint-every", "100",
-        "--no-compile", "--no-prefetch", "--sync-eval",
+        "--no-compile", "--sync-eval",
         "--mlflow-tracking-uri", "http://unused", "--mlflow-experiment", "test",
         "--mlflow-run-name", "test",
     ]
