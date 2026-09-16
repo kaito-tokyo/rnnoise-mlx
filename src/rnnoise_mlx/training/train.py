@@ -311,6 +311,18 @@ def train(
             return tuple(divide_gradient_tree(value, divisor) for value in tree)
         return tree / divisor
 
+    def multiply_gradient_tree(tree, multiplier):
+        if isinstance(tree, dict):
+            return {
+                key: multiply_gradient_tree(value, multiplier)
+                for key, value in tree.items()
+            }
+        if isinstance(tree, list):
+            return [multiply_gradient_tree(value, multiplier) for value in tree]
+        if isinstance(tree, tuple):
+            return tuple(multiply_gradient_tree(value, multiplier) for value in tree)
+        return tree * multiplier
+
     def first_chunk_grad(features, gain, vad):
         (loss, state), gradients = stateful_value_and_grad(
             model.trainable_parameters(), features, gain, vad, (), True
@@ -465,10 +477,7 @@ def train(
                         )
                     chunk_frames = chunk_gain.shape[1]
                     mx.eval(loss, state, gradients)
-                    weighted_gradients = {
-                        key: value * chunk_frames
-                        for key, value in gradients.items()
-                    }
+                    weighted_gradients = multiply_gradient_tree(gradients, chunk_frames)
                     accumulated_gradients = (
                         weighted_gradients
                         if accumulated_gradients is None
