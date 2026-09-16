@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import mlx.core as mx
 import numpy as np
 
 FRAME_DIM = 98
@@ -17,7 +18,7 @@ class FeatureDataset:
             raise ValueError("sequence_length must be at least 5")
         self.sequence_length = sequence_length
         if path.endswith(".npy"):
-            data = np.load(path, mmap_mode="r")
+            data = mx.load(path)
             if data.ndim != 3 or data.shape[1:] != (sequence_length, FRAME_DIM):
                 raise ValueError(
                     "NumPy feature file must have shape "
@@ -30,8 +31,8 @@ class FeatureDataset:
             frames = raw.size // FRAME_DIM
             self.sequence_count = frames // sequence_length
             usable = self.sequence_count * sequence_length * FRAME_DIM
-            self.data = raw[:usable].reshape(
-                self.sequence_count, sequence_length, FRAME_DIM
+            self.data = mx.array(
+                raw[:usable].reshape(self.sequence_count, sequence_length, FRAME_DIM)
             )
         if self.sequence_count == 0:
             raise ValueError("feature file contains no complete sequence")
@@ -40,7 +41,8 @@ class FeatureDataset:
         order = rng.permutation(self.sequence_count)
         complete = self.sequence_count - self.sequence_count % batch_size
         for start in range(0, complete, batch_size):
-            batch = np.asarray(self.data[order[start : start + batch_size]])
+            indices = mx.array(order[start : start + batch_size], dtype=mx.uint32)
+            batch = self.data[indices]
             if chunk_length is not None:
                 if chunk_length < 5 or chunk_length > self.sequence_length:
                     raise ValueError("chunk_length must be between 5 and sequence_length")
