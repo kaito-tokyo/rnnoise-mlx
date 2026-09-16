@@ -18,10 +18,11 @@ class FeatureDataset:
             raise ValueError("sequence_length must be at least 5")
         self.sequence_length = sequence_length
         if path.endswith(".npy"):
-            # Keep the complete feature corpus on the CPU stream.  Loading it
-            # on the GPU would attempt to materialize the whole multi-GB
-            # corpus before the first minibatch is selected.
-            data = mx.load(path, stream=mx.cpu)
+            # Keep the corpus memory-mapped.  The Colab corpus is larger than
+            # the runtime RAM, so materializing the complete .npy file as an
+            # MLX array is not viable.  Only the selected minibatch is copied
+            # into an MLX array below.
+            data = np.load(path, mmap_mode="r")
             if data.ndim != 3 or data.shape[1:] != (sequence_length, FRAME_DIM):
                 raise ValueError(
                     "NumPy feature file must have shape "
@@ -34,9 +35,8 @@ class FeatureDataset:
             frames = raw.size // FRAME_DIM
             self.sequence_count = frames // sequence_length
             usable = self.sequence_count * sequence_length * FRAME_DIM
-            self.data = mx.array(
-                raw[:usable].reshape(self.sequence_count, sequence_length, FRAME_DIM),
-                stream=mx.cpu,
+            self.data = raw[:usable].reshape(
+                self.sequence_count, sequence_length, FRAME_DIM
             )
         if self.sequence_count == 0:
             raise ValueError("feature file contains no complete sequence")
@@ -46,7 +46,9 @@ class FeatureDataset:
         complete = self.sequence_count - self.sequence_count % batch_size
         for start in range(0, complete, batch_size):
             indices = mx.array(order[start : start + batch_size], dtype=mx.uint32)
-            batch = self.data[indices]
+            # Materialize only one minibatch as an MLX array.  This is the
+            # boundary between host-side storage and the MLX training graph.
+            batch = mx.array(self.data[order[start : start + batch_size]])
             if chunk_length is not None:
                 if chunk_length < 5 or chunk_length > self.sequence_length:
                     raise ValueError("chunk_length must be between 5 and sequence_length")
