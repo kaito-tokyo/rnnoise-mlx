@@ -48,7 +48,7 @@ class FeatureDataset:
             # Materialize only one minibatch as an MLX array.  This is the
             # boundary between host-side storage and the MLX training graph.
             host_batch = self.data[order[start : start + batch_size]]
-            batch = mx.array(host_batch, stream=mx.gpu)
+            batch = mx.array(host_batch)
             if chunk_length is not None:
                 if chunk_length < 5 or chunk_length > self.sequence_length:
                     raise ValueError("chunk_length must be between 5 and sequence_length")
