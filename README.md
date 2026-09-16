@@ -124,10 +124,13 @@ training history. Progress can be consumed directly by notebook callers with
 `progress_callback`.
 
 When `segmented_tbptt_length` is set, training is performed one segment at a
-time. Each segment runs its own forward/backward pass and optimizer update;
+time. Each segment runs its own forward/backward pass. Gradients are accumulated
+across the complete sequence and applied in one optimizer update;
 the recurrent state is carried to the next segment and detached at the segment
 boundary. The segment step is the unit passed to `mx.compile`, so the full
-sequence is not compiled as one large graph. This is an intentional TBPTT
+sequence is not compiled as one large graph. Progress events and `max_updates`
+count one update per complete sequence (2,000 frames in the standard
+configuration). This is an intentional TBPTT
 variant and does not preserve optimizer-update compatibility with older
 full-sequence segmented checkpoints.
 

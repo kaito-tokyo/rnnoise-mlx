@@ -293,21 +293,53 @@ def train(
 
     stateful_value_and_grad = mx.value_and_grad(stateful_objective)
 
-    def first_chunk_step(features, gain, vad):
+    def add_gradient_trees(left, right):
+        if isinstance(left, dict):
+            return {key: add_gradient_trees(left[key], right[key]) for key in left}
+        if isinstance(left, list):
+            return [add_gradient_trees(a, b) for a, b in zip(left, right)]
+        if isinstance(left, tuple):
+            return tuple(add_gradient_trees(a, b) for a, b in zip(left, right))
+        return left + right
+
+    def divide_gradient_tree(tree, divisor):
+        if isinstance(tree, dict):
+            return {key: divide_gradient_tree(value, divisor) for key, value in tree.items()}
+        if isinstance(tree, list):
+            return [divide_gradient_tree(value, divisor) for value in tree]
+        if isinstance(tree, tuple):
+            return tuple(divide_gradient_tree(value, divisor) for value in tree)
+        return tree / divisor
+
+    def first_chunk_grad(features, gain, vad):
         (loss, state), gradients = stateful_value_and_grad(
             model.trainable_parameters(), features, gain, vad, (), True
         )
+        return loss, state, gradients
+
+    def next_chunk_grad(features, gain, vad, state):
+        (loss, new_state), gradients = stateful_value_and_grad(
+            model.trainable_parameters(), features, gain, vad, state, False
+        )
+        return loss, new_state, gradients
+
+    def first_chunk_step(features, gain, vad):
+        loss, state, gradients = first_chunk_grad(features, gain, vad)
         optimizer.update(model, gradients)
         return loss, state
 
     def next_chunk_step(features, gain, vad, state):
-        (loss, new_state), gradients = stateful_value_and_grad(
-            model.trainable_parameters(), features, gain, vad, state, False
-        )
+        loss, new_state, gradients = next_chunk_grad(features, gain, vad, state)
         optimizer.update(model, gradients)
         return loss, new_state
 
     if not args.no_compile:
+        first_chunk_grad = partial(
+            mx.compile, inputs=captured_state, outputs=captured_state
+        )(first_chunk_grad)
+        next_chunk_grad = partial(
+            mx.compile, inputs=captured_state, outputs=captured_state
+        )(next_chunk_grad)
         first_chunk_step = partial(
             mx.compile, inputs=captured_state, outputs=captured_state
         )(first_chunk_step)
@@ -409,31 +441,51 @@ def train(
                 state = None
                 chunk_ranges = (0,)
 
-            for start in chunk_ranges:
-                if segment_length or args.stateful_tbptt:
+            if segment_length:
+                accumulated_gradients = None
+                accumulated_loss = None
+                target_frames = 0
+                for start in chunk_ranges:
                     end = min(start + args.training_chunk_length, args.sequence_length)
-                    if segment_length:
-                        end = start + segment_length
+                    end = start + segment_length
                     chunk_features = mx.array(features[:, start:end, :])
-                    if start == 0 or segment_state == "reset":
+                    is_first_chunk = start == 0 or segment_state == "reset"
+                    if is_first_chunk:
                         target_start = start + 3
                         chunk_gain = mx.array(gain[:, target_start : end - 1, :])
                         chunk_vad = mx.array(vad[:, target_start : end - 1, :])
-                        loss, state = first_chunk_step(chunk_features, chunk_gain, chunk_vad)
+                        loss, state, gradients = first_chunk_grad(
+                            chunk_features, chunk_gain, chunk_vad
+                        )
                     else:
                         chunk_gain = mx.array(gain[:, start - 1 : end - 1, :])
                         chunk_vad = mx.array(vad[:, start - 1 : end - 1, :])
-                        loss, state = next_chunk_step(chunk_features, chunk_gain, chunk_vad, state)
+                        loss, state, gradients = next_chunk_grad(
+                            chunk_features, chunk_gain, chunk_vad, state
+                        )
+                    chunk_frames = chunk_gain.shape[1]
+                    mx.eval(loss, state, gradients)
+                    weighted_gradients = {
+                        key: value * chunk_frames
+                        for key, value in gradients.items()
+                    }
+                    accumulated_gradients = (
+                        weighted_gradients
+                        if accumulated_gradients is None
+                        else add_gradient_trees(accumulated_gradients, weighted_gradients)
+                    )
+                    accumulated_loss = (
+                        loss * chunk_frames
+                        if accumulated_loss is None
+                        else accumulated_loss + loss * chunk_frames
+                    )
+                    target_frames += chunk_frames
                     state = tuple(mx.stop_gradient(value) for value in state)
-                else:
-                    loss = train_step(mx.array(features), mx.array(gain), mx.array(vad))
-
+                gradients = divide_gradient_tree(accumulated_gradients, target_frames)
+                optimizer.update(model, gradients)
+                loss = accumulated_loss / target_frames
                 update += 1
-                processed_frames += args.batch_size * (
-                    chunk_features.shape[1]
-                    if args.stateful_tbptt or segment_length
-                    else features.shape[1]
-                )
+                processed_frames += args.batch_size * features.shape[1]
                 pending_losses.append((update, epoch, processed_frames, loss))
                 mx.eval(model.state, optimizer.state, loss)
                 if len(pending_losses) >= 10:
@@ -443,12 +495,41 @@ def train(
                     mx.eval(model.state, optimizer.state)
                 if update % args.checkpoint_every == 0:
                     checkpoint_due = True
-                if (
-                    args.max_updates is not None
-                    and update >= args.max_updates
-                    and (args.stateful_tbptt or segment_length)
-                ):
-                    break
+            else:
+                for start in chunk_ranges:
+                    if args.stateful_tbptt:
+                        end = min(start + args.training_chunk_length, args.sequence_length)
+                        chunk_features = mx.array(features[:, start:end, :])
+                        if start == 0 or segment_state == "reset":
+                            target_start = start + 3
+                            chunk_gain = mx.array(gain[:, target_start : end - 1, :])
+                            chunk_vad = mx.array(vad[:, target_start : end - 1, :])
+                            loss, state = first_chunk_step(chunk_features, chunk_gain, chunk_vad)
+                        else:
+                            chunk_gain = mx.array(gain[:, start - 1 : end - 1, :])
+                            chunk_vad = mx.array(vad[:, start - 1 : end - 1, :])
+                            loss, state = next_chunk_step(
+                                chunk_features, chunk_gain, chunk_vad, state
+                            )
+                        state = tuple(mx.stop_gradient(value) for value in state)
+                    else:
+                        loss = train_step(mx.array(features), mx.array(gain), mx.array(vad))
+
+                    update += 1
+                    processed_frames += args.batch_size * (
+                        chunk_features.shape[1] if args.stateful_tbptt else features.shape[1]
+                    )
+                    pending_losses.append((update, epoch, processed_frames, loss))
+                    mx.eval(model.state, optimizer.state, loss)
+                    if len(pending_losses) >= 10:
+                        collect_pending()
+                    if update % 32 == 0:
+                        collect_pending()
+                        mx.eval(model.state, optimizer.state)
+                    if update % args.checkpoint_every == 0:
+                        checkpoint_due = True
+                    if args.max_updates is not None and update >= args.max_updates:
+                        break
             batch_index += 1
             final_batch = (
                 epoch == args.epochs
