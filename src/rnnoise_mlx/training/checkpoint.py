@@ -53,6 +53,10 @@ def _feature_identity(
         feature.with_suffix(".manifest.json"),
         feature.parent / "manifest.json",
     )
+    candidates = (
+        feature.with_name(feature.name + ".manifest.json"),
+        *candidates,
+    )
     manifest_path = next((path for path in candidates if path.is_file()), None)
     if manifest_path is None or not feature.is_file():
         return None

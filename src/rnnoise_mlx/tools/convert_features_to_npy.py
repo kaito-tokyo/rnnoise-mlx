@@ -68,7 +68,7 @@ def convert(source: Path, destination: Path, sequence_length: int) -> dict[str, 
         "dtype": "<f4",
         "shape": [sequence_count, sequence_length, FRAME_DIM],
     }
-    destination.with_suffix(".manifest.json").write_text(
+    destination.with_name(destination.name + ".manifest.json").write_text(
         json.dumps(metadata, indent=2) + "\n"
     )
     return metadata
