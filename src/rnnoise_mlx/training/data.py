@@ -45,10 +45,10 @@ class FeatureDataset:
         order = rng.permutation(self.sequence_count)
         complete = self.sequence_count - self.sequence_count % batch_size
         for start in range(0, complete, batch_size):
-            indices = mx.array(order[start : start + batch_size], dtype=mx.uint32)
             # Materialize only one minibatch as an MLX array.  This is the
             # boundary between host-side storage and the MLX training graph.
-            batch = mx.array(self.data[order[start : start + batch_size]])
+            host_batch = self.data[order[start : start + batch_size]]
+            batch = mx.array(host_batch, stream=mx.gpu)
             if chunk_length is not None:
                 if chunk_length < 5 or chunk_length > self.sequence_length:
                     raise ValueError("chunk_length must be between 5 and sequence_length")
