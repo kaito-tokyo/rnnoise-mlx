@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from rnnoise_mlx.training import TrainConfig, train
+from rnnoise_mlx.training import TrainConfig, preflight_feature_identities, train
 
 
 def main() -> None:
@@ -21,8 +21,7 @@ def main() -> None:
     if not features.is_file():
         raise SystemExit(f"missing features: {features}")
 
-    summary = train(
-        TrainConfig(
+    config = TrainConfig(
             features=str(features),
             output=args.output,
             batch_size=args.batch_size,
@@ -34,6 +33,11 @@ def main() -> None:
             sync_eval=True,
             seed=141,
         )
+    feature_identity, evaluation_feature_identity = preflight_feature_identities(config)
+    summary = train(
+        config,
+        feature_identity=feature_identity,
+        evaluation_feature_identity=evaluation_feature_identity,
     )
     print(summary, flush=True)
 

@@ -161,9 +161,11 @@ def train(
     """
     output = Path(args.output)
     if feature_identity is _IDENTITY_NOT_PROVIDED:
-        feature_identity = _feature_identity(vars(args))
+        raise ValueError("feature_identity must be computed by preflight_feature_identities")
     if evaluation_feature_identity is _IDENTITY_NOT_PROVIDED:
-        evaluation_feature_identity = _feature_identity(vars(args), "eval_features")
+        raise ValueError(
+            "evaluation_feature_identity must be computed by preflight_feature_identities"
+        )
     verified_feature_identity = feature_identity
     verified_evaluation_feature_identity = evaluation_feature_identity
     dataset = FeatureDataset(args.features, args.sequence_length)
@@ -580,7 +582,13 @@ def train(
     (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
     return summary
 def main(argv=None):
-    return train(parse_args(argv))
+    parsed = parse_args(argv)
+    training_identity, evaluation_identity = preflight_feature_identities(parsed)
+    return train(
+        parsed,
+        feature_identity=training_identity,
+        evaluation_feature_identity=evaluation_identity,
+    )
 
 if __name__ == "__main__":
     main()
