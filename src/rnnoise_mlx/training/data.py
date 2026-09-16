@@ -15,14 +15,26 @@ class FeatureDataset:
     def __init__(self, path: str, sequence_length: int = 2000):
         if sequence_length < 5:
             raise ValueError("sequence_length must be at least 5")
-        raw = np.memmap(path, dtype="<f4", mode="r")
-        frames = raw.size // FRAME_DIM
         self.sequence_length = sequence_length
-        self.sequence_count = frames // sequence_length
+        if path.endswith(".npy"):
+            data = np.load(path, mmap_mode="r")
+            if data.ndim != 3 or data.shape[1:] != (sequence_length, FRAME_DIM):
+                raise ValueError(
+                    "NumPy feature file must have shape "
+                    f"(sequence_count, {sequence_length}, {FRAME_DIM})"
+                )
+            self.data = data
+            self.sequence_count = data.shape[0]
+        else:
+            raw = np.memmap(path, dtype="<f4", mode="r")
+            frames = raw.size // FRAME_DIM
+            self.sequence_count = frames // sequence_length
+            usable = self.sequence_count * sequence_length * FRAME_DIM
+            self.data = raw[:usable].reshape(
+                self.sequence_count, sequence_length, FRAME_DIM
+            )
         if self.sequence_count == 0:
             raise ValueError("feature file contains no complete sequence")
-        usable = self.sequence_count * sequence_length * FRAME_DIM
-        self.data = raw[:usable].reshape(self.sequence_count, sequence_length, FRAME_DIM)
 
     def batches(self, batch_size: int, rng: np.random.Generator, chunk_length: int | None = None):
         order = rng.permutation(self.sequence_count)

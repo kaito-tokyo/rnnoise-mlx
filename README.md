@@ -36,6 +36,24 @@ artifacts.
 Each `features.f32` frame matches upstream `dump_features`: 98 float32 values
 containing 65 input features, 32 target gains, and one VAD target.
 
+For repeated training runs, convert the raw feature files once on the Mac mini
+to sequence-shaped NumPy files. The converter uses a bounded memory map and does
+not load the complete feature corpus into RAM:
+
+```sh
+python -m rnnoise_mlx.tools.convert_features_to_npy \
+  data/features/train.f32 data/features/train.npy \
+  --sequence-length 2000
+python -m rnnoise_mlx.tools.convert_features_to_npy \
+  data/features/eval.f32 data/features/eval.npy \
+  --sequence-length 2000
+```
+
+Copy the resulting `.npy` files and their `.manifest.json` files to Google
+Drive. Copy them to the Colab local disk before training; do not train directly
+from the mounted Drive filesystem. `FeatureDataset` accepts both the legacy
+raw `.f32` format and the sequence-shaped `.npy` format.
+
 Use a TBPTT segment length of 100 for rapid corpus and quality screening. Loss
 is a failure-detection signal, not a substitute for listening tests. Promote
 promising candidates to segment length 500 with continuous Conv/GRU state,
