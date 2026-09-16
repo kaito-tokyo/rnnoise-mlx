@@ -278,49 +278,9 @@ def train(
     ):
         raise ValueError("segmented TBPTT length must be >4 and divide --sequence-length")
 
-    def segmented_objective(model, features, gain, vad):
-        weighted_loss = 0
-        target_frames = 0
-        state = None
-        for start in range(0, args.sequence_length, segment_length):
-            end = start + segment_length
-            chunk = features[:, start:end, :]
-            if start == 0 or segment_state == "reset":
-                pred_gain, pred_vad, state = model.first_chunk(chunk)
-                target_gain = gain[:, start + 3 : end - 1, :]
-                target_vad = vad[:, start + 3 : end - 1, :]
-            else:
-                state = tuple(mx.stop_gradient(value) for value in state)
-                pred_gain, pred_vad, state = model.next_chunk(chunk, state)
-                if equalize_reset_targets:
-                    pred_gain = pred_gain[:, 4:, :]
-                    pred_vad = pred_vad[:, 4:, :]
-                    target_gain = gain[:, start + 3 : end - 1, :]
-                    target_vad = vad[:, start + 3 : end - 1, :]
-                else:
-                    target_gain = gain[:, start - 1 : end - 1, :]
-                    target_vad = vad[:, start - 1 : end - 1, :]
-            loss = rnnoise_loss_aligned(
-                pred_gain, pred_vad, target_gain, target_vad, args.gamma
-            )[0]
-            frames = pred_gain.shape[-2]
-            weighted_loss = weighted_loss + frames * loss
-            target_frames += frames
-        return weighted_loss / target_frames
-
-    segmented_value_and_grad = nn.value_and_grad(model, segmented_objective)
-
-    def segmented_step(features, gain, vad):
-        loss, gradients = segmented_value_and_grad(model, features, gain, vad)
-        optimizer.update(model, gradients)
-        return loss
-
     if not args.no_compile:
         captured_state = [model.state, optimizer.state]
         train_step = partial(mx.compile, inputs=captured_state, outputs=captured_state)(train_step)
-        segmented_step = partial(
-            mx.compile, inputs=captured_state, outputs=captured_state
-        )(segmented_step)
 
     def stateful_objective(params, features, gain, vad, state, first):
         model.update(params)
@@ -441,7 +401,7 @@ def train(
         for features, gain, vad in batches_for_epoch(epoch, first_batch):
             if segment_length:
                 state = None
-                chunk_ranges = (0,)
+                chunk_ranges = range(0, args.sequence_length, segment_length)
             elif args.stateful_tbptt:
                 state = None
                 chunk_ranges = range(0, args.sequence_length, args.training_chunk_length)
@@ -450,16 +410,15 @@ def train(
                 chunk_ranges = (0,)
 
             for start in chunk_ranges:
-                if segment_length:
-                    loss = segmented_step(
-                        mx.array(features), mx.array(gain), mx.array(vad)
-                    )
-                elif args.stateful_tbptt:
+                if segment_length or args.stateful_tbptt:
                     end = min(start + args.training_chunk_length, args.sequence_length)
+                    if segment_length:
+                        end = start + segment_length
                     chunk_features = mx.array(features[:, start:end, :])
-                    if start == 0:
-                        chunk_gain = mx.array(gain[:, 3 : end - 1, :])
-                        chunk_vad = mx.array(vad[:, 3 : end - 1, :])
+                    if start == 0 or segment_state == "reset":
+                        target_start = start + 3
+                        chunk_gain = mx.array(gain[:, target_start : end - 1, :])
+                        chunk_vad = mx.array(vad[:, target_start : end - 1, :])
                         loss, state = first_chunk_step(chunk_features, chunk_gain, chunk_vad)
                     else:
                         chunk_gain = mx.array(gain[:, start - 1 : end - 1, :])
@@ -472,7 +431,7 @@ def train(
                 update += 1
                 processed_frames += args.batch_size * (
                     chunk_features.shape[1]
-                    if args.stateful_tbptt and not segment_length
+                    if args.stateful_tbptt or segment_length
                     else features.shape[1]
                 )
                 pending_losses.append((update, epoch, processed_frames, loss))
@@ -487,7 +446,7 @@ def train(
                 if (
                     args.max_updates is not None
                     and update >= args.max_updates
-                    and not args.stateful_tbptt
+                    and (args.stateful_tbptt or segment_length)
                 ):
                     break
             batch_index += 1

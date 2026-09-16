@@ -123,6 +123,14 @@ The training command records local checkpoints, evaluation results, and
 training history. Progress can be consumed directly by notebook callers with
 `progress_callback`.
 
+When `segmented_tbptt_length` is set, training is performed one segment at a
+time. Each segment runs its own forward/backward pass and optimizer update;
+the recurrent state is carried to the next segment and detached at the segment
+boundary. The segment step is the unit passed to `mx.compile`, so the full
+sequence is not compiled as one large graph. This is an intentional TBPTT
+variant and does not preserve optimizer-update compatibility with older
+full-sequence segmented checkpoints.
+
 The same training core is available to Python callers without constructing a
 CLI argument vector:
 
