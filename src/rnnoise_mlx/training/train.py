@@ -24,6 +24,9 @@ from .loss import rnnoise_loss, rnnoise_loss_aligned
 from .model import ModelConfig, RNNoise
 
 
+_IDENTITY_NOT_PROVIDED = object()
+
+
 @dataclass
 class TrainConfig:
     """Configuration for one training run, independent of CLI parsing."""
@@ -132,9 +135,22 @@ def parse_args(argv=None) -> TrainConfig:
     return TrainConfig(**vars(args))
 
 
+def preflight_feature_identities(
+    args: TrainConfig,
+) -> tuple[str | None, str | None]:
+    """Compute input identities before training starts."""
+    return (
+        _feature_identity(vars(args)),
+        _feature_identity(vars(args), "eval_features"),
+    )
+
+
 def train(
     args: TrainConfig,
     progress_callback: Callable[[TrainingEvent], None] | None = None,
+    *,
+    feature_identity: str | None | object = _IDENTITY_NOT_PROVIDED,
+    evaluation_feature_identity: str | None | object = _IDENTITY_NOT_PROVIDED,
 ):
     """Run training and optionally report progress and checkpoint events.
 
@@ -144,10 +160,12 @@ def train(
     propagated so callers can stop a run when progress handling fails.
     """
     output = Path(args.output)
-    verified_feature_identity = _feature_identity(vars(args))
-    verified_evaluation_feature_identity = _feature_identity(
-        vars(args), "eval_features"
-    )
+    if feature_identity is _IDENTITY_NOT_PROVIDED:
+        feature_identity = _feature_identity(vars(args))
+    if evaluation_feature_identity is _IDENTITY_NOT_PROVIDED:
+        evaluation_feature_identity = _feature_identity(vars(args), "eval_features")
+    verified_feature_identity = feature_identity
+    verified_evaluation_feature_identity = evaluation_feature_identity
     dataset = FeatureDataset(args.features, args.sequence_length)
     if dataset.sequence_count < args.batch_size:
         raise ValueError("feature dataset must contain at least one complete batch")
