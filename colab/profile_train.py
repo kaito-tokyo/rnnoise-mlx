@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from rnnoise_mlx.training import TrainConfig, preflight_feature_identities, train
+from rnnoise_mlx.training import TrainConfig, train
 
 
 def main() -> None:
@@ -15,6 +15,8 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--max-updates", type=int, default=20)
     parser.add_argument("--segmented-tbptt-length", type=int, default=250)
+    parser.add_argument("--feature-identity", required=True)
+    parser.add_argument("--evaluation-feature-identity")
     args = parser.parse_args()
 
     features = Path(args.features)
@@ -33,11 +35,10 @@ def main() -> None:
             sync_eval=True,
             seed=141,
         )
-    feature_identity, evaluation_feature_identity = preflight_feature_identities(config)
     summary = train(
         config,
-        feature_identity=feature_identity,
-        evaluation_feature_identity=evaluation_feature_identity,
+        feature_identity=args.feature_identity,
+        evaluation_feature_identity=args.evaluation_feature_identity,
     )
     print(summary, flush=True)
 

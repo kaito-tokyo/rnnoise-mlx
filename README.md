@@ -55,6 +55,52 @@ frames.
 The current corpus-cleaning and promoted-training parameters are documented in
 [the CJK two-stage procedure](docs/cjk-two-stage-training.md).
 
+### Training on Notebook
+
+Notebook training uses two explicit phases. The preflight cell must run first;
+it validates the feature paths and computes the feature identities. The training
+cell must then pass those already-computed identities to `train()`:
+
+```python
+from rnnoise_mlx.training import TrainConfig, preflight_feature_identities, train
+
+config = TrainConfig(
+    features="/content/train.f32",
+    output="/content/runs/notebook-run",
+    eval_features=None,
+    batch_size=2,
+    sequence_length=2000,
+    segmented_tbptt_length=250,
+    segmented_tbptt_state="carry",
+    max_updates=10,
+    checkpoint_every=10,
+    sync_eval=True,
+    seed=141,
+)
+
+# Preflight cell: run once before the training cell.
+feature_identity, evaluation_feature_identity = preflight_feature_identities(config)
+```
+
+The training cell must not hash feature files, inspect their contents for
+identity, or perform other preflight work. It may only call `train()` with the
+identities produced by the preflight cell:
+
+```python
+summary = train(
+    config,
+    progress_callback=on_progress,
+    feature_identity=feature_identity,
+    evaluation_feature_identity=evaluation_feature_identity,
+)
+```
+
+This is an execution-safety rule, not merely a performance suggestion:
+`train()` rejects omitted identities. If a notebook is restarted, rerun the
+preflight cell before rerunning the training cell. Profiling runners follow the
+same rule and must receive identities from the notebook or command line; they
+must not calculate SHA-256 as part of the profiled training process.
+
 The training command records local checkpoints, evaluation results, and
 training history. Progress can be consumed directly by notebook callers with
 `progress_callback`.
@@ -67,6 +113,7 @@ from rnnoise_mlx.training import (
     TrainConfig,
     TrainingCheckpoint,
     TrainingProgress,
+    preflight_feature_identities,
     train,
 )
 
@@ -76,14 +123,21 @@ def on_progress(event):
     elif isinstance(event, TrainingCheckpoint):
         print(f"checkpoint: {event.path}")
 
-train(TrainConfig(
+config = TrainConfig(
     features="data/features/train.f32",
     output="runs/notebook-run",
     eval_features="data/features/eval.f32",
     max_updates=320,
     segmented_tbptt_length=500,
     segmented_tbptt_state="carry",
-), progress_callback=on_progress)
+)
+feature_identity, evaluation_feature_identity = preflight_feature_identities(config)
+train(
+    config,
+    progress_callback=on_progress,
+    feature_identity=feature_identity,
+    evaluation_feature_identity=evaluation_feature_identity,
+)
 ```
 
 `parse_args()` and `main()` remain the CLI adapter; `train(TrainConfig(...))`
