@@ -43,7 +43,9 @@ class TrainConfig:
     seed: int = 0
     eval_features: str | None = None
     training_chunk_length: int = 200
-    no_compile: bool = False
+    # CUDA graph compilation is opt-in.  For segmented RNN TBPTT it can retain
+    # substantially more memory than the uncompiled path.
+    no_compile: bool = True
     # Retained for checkpoint/config compatibility; training is always synchronous.
     sync_eval: bool = True
     stateful_tbptt: bool = False
@@ -95,7 +97,20 @@ def parse_args(argv=None) -> TrainConfig:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--eval-features")
     parser.add_argument("--training-chunk-length", type=int, default=200)
-    parser.add_argument("--no-compile", action="store_true")
+    compile_group = parser.add_mutually_exclusive_group()
+    compile_group.add_argument(
+        "--compile",
+        dest="no_compile",
+        action="store_false",
+        help="enable MLX CUDA graph compilation (higher memory use)",
+    )
+    compile_group.add_argument(
+        "--no-compile",
+        dest="no_compile",
+        action="store_true",
+        help="disable MLX CUDA graph compilation (default)",
+    )
+    parser.set_defaults(no_compile=True)
     parser.add_argument(
         "--stateful-tbptt",
         action="store_true",

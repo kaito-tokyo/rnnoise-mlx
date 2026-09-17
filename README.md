@@ -134,6 +134,11 @@ configuration). This is an intentional TBPTT
 variant and does not preserve optimizer-update compatibility with older
 full-sequence segmented checkpoints.
 
+CUDA graph compilation is opt-in because the uncompiled path uses substantially
+less GPU memory for this segmented RNN workload. Use `--compile` only when its
+performance and memory impact has been measured for the selected batch and
+segment sizes; `--no-compile` remains accepted and is the default.
+
 The same training core is available to Python callers without constructing a
 CLI argument vector:
 
