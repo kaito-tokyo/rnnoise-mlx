@@ -353,14 +353,38 @@ def train(
                 mx.compile, inputs=captured_state, outputs=captured_state
             )(train_step)
 
-    def stateful_objective(params, features, gain, vad, state, first):
+    def stateful_objective(
+        params, features, gain, vad, state, feature_workspace, conv1_workspace, first
+    ):
         model.update(params)
-        if first:
+        if not use_compiled_chunk and first:
             predicted_gain, predicted_vad, new_state = model.first_chunk(features)
-        else:
+            return rnnoise_loss_aligned(
+                predicted_gain, predicted_vad, gain, vad, args.gamma
+            )[0], new_state
+        if not use_compiled_chunk:
             predicted_gain, predicted_vad, new_state = model.next_chunk(features, state)
+            return rnnoise_loss_aligned(
+                predicted_gain, predicted_vad, gain, vad, args.gamma
+            )[0], new_state
+        if first:
+            (
+                predicted_gain,
+                predicted_vad,
+                new_state,
+                feature_workspace,
+                conv1_workspace,
+            ) = model.first_chunk_fixed(feature_workspace, features, conv1_workspace)
+        else:
+            (
+                predicted_gain,
+                predicted_vad,
+                new_state,
+                feature_workspace,
+                conv1_workspace,
+            ) = model.next_chunk_fixed(feature_workspace, features, conv1_workspace, state)
         loss = rnnoise_loss_aligned(predicted_gain, predicted_vad, gain, vad, args.gamma)[0]
-        return loss, new_state
+        return loss, new_state, feature_workspace, conv1_workspace
 
     stateful_value_and_grad = mx.value_and_grad(stateful_objective)
 
@@ -406,26 +430,62 @@ def train(
         accumulate_gradients = mx.compile(add_gradient_trees)
         average_gradients = mx.compile(divide_gradient_tree)
 
-    def first_chunk_grad(features, gain, vad):
-        (loss, state), gradients = stateful_value_and_grad(
-            model.trainable_parameters(), features, gain, vad, (), True
+    def first_chunk_grad(features, gain, vad, feature_workspace=(), conv1_workspace=()):
+        (loss, state, feature_workspace, conv1_workspace), gradients = stateful_value_and_grad(
+            model.trainable_parameters(),
+            features,
+            gain,
+            vad,
+            (),
+            feature_workspace,
+            conv1_workspace,
+            True,
         )
+        if use_compiled_chunk:
+            return loss, state, gradients, feature_workspace, conv1_workspace
         return loss, state, gradients
 
-    def next_chunk_grad(features, gain, vad, state):
-        (loss, new_state), gradients = stateful_value_and_grad(
-            model.trainable_parameters(), features, gain, vad, state, False
+    def next_chunk_grad(
+        features, gain, vad, state, feature_workspace=(), conv1_workspace=()
+    ):
+        (loss, new_state, feature_workspace, conv1_workspace), gradients = stateful_value_and_grad(
+            model.trainable_parameters(),
+            features,
+            gain,
+            vad,
+            state,
+            feature_workspace,
+            conv1_workspace,
+            False,
         )
+        if use_compiled_chunk:
+            return loss, new_state, gradients, feature_workspace, conv1_workspace
         return loss, new_state, gradients
 
-    def first_chunk_step(features, gain, vad):
-        loss, state, gradients = first_chunk_grad(features, gain, vad)
+    def first_chunk_step(features, gain, vad, feature_workspace=(), conv1_workspace=()):
+        result = first_chunk_grad(features, gain, vad, feature_workspace, conv1_workspace)
+        if use_compiled_chunk:
+            loss, state, gradients, feature_workspace, conv1_workspace = result
+        else:
+            loss, state, gradients = result
         optimizer.update(model, gradients)
+        if use_compiled_chunk:
+            return loss, state, feature_workspace, conv1_workspace
         return loss, state
 
-    def next_chunk_step(features, gain, vad, state):
-        loss, new_state, gradients = next_chunk_grad(features, gain, vad, state)
+    def next_chunk_step(
+        features, gain, vad, state, feature_workspace=(), conv1_workspace=()
+    ):
+        result = next_chunk_grad(
+            features, gain, vad, state, feature_workspace, conv1_workspace
+        )
+        if use_compiled_chunk:
+            loss, new_state, gradients, feature_workspace, conv1_workspace = result
+        else:
+            loss, new_state, gradients = result
         optimizer.update(model, gradients)
+        if use_compiled_chunk:
+            return loss, new_state, feature_workspace, conv1_workspace
         return loss, new_state
 
     def apply_optimizer(gradients):
@@ -537,22 +597,19 @@ def train(
             batch_started = time.perf_counter()
             if segment_length:
                 fixed_chunk_features = None
-                fixed_chunk_gain = None
-                fixed_chunk_vad = None
+                fixed_conv1_workspace = None
                 if use_compiled_chunk:
                     if segment_length != 250:
                         raise ValueError(
                             "compiled_chunk requires a fixed 250-frame workspace"
                         )
                     fixed_chunk_features = mx.zeros(
-                        (features.shape[0], 250, features.shape[2]),
+                        (features.shape[0], 252, features.shape[2]),
                         dtype=features.dtype,
                     )
-                    fixed_chunk_gain = mx.zeros(
-                        (gain.shape[0], 249, gain.shape[2]), dtype=gain.dtype
-                    )
-                    fixed_chunk_vad = mx.zeros(
-                        (vad.shape[0], 249, vad.shape[2]), dtype=vad.dtype
+                    fixed_conv1_workspace = mx.zeros(
+                        (features.shape[0], 252, model.config.cond_size),
+                        dtype=features.dtype,
                     )
                 state = None
                 chunk_ranges = range(0, args.sequence_length, segment_length)
@@ -584,24 +641,33 @@ def train(
                             chunk_gain = gain[:, target_start : end - 1, :]
                             chunk_vad = vad[:, target_start : end - 1, :]
                             if use_compiled_chunk:
-                                fixed_chunk_features[:, :, :] = chunk_features
-                                chunk_features = fixed_chunk_features
-                            loss, state, gradients = first_chunk_grad(
-                                chunk_features, chunk_gain, chunk_vad
-                            )
+                                loss, state, gradients, fixed_chunk_features, fixed_conv1_workspace = first_chunk_grad(
+                                    chunk_features,
+                                    chunk_gain,
+                                    chunk_vad,
+                                    fixed_chunk_features,
+                                    fixed_conv1_workspace,
+                                )
+                            else:
+                                loss, state, gradients = first_chunk_grad(
+                                    chunk_features, chunk_gain, chunk_vad
+                                )
                         else:
                             chunk_gain = gain[:, start - 1 : end - 1, :]
                             chunk_vad = vad[:, start - 1 : end - 1, :]
                             if use_compiled_chunk:
-                                fixed_chunk_features[:, :, :] = chunk_features
-                                fixed_chunk_gain[:, :, :] = chunk_gain
-                                fixed_chunk_vad[:, :, :] = chunk_vad
-                                chunk_features = fixed_chunk_features
-                                chunk_gain = fixed_chunk_gain
-                                chunk_vad = fixed_chunk_vad
-                            loss, state, gradients = next_chunk_grad(
-                                chunk_features, chunk_gain, chunk_vad, state
-                            )
+                                loss, state, gradients, fixed_chunk_features, fixed_conv1_workspace = next_chunk_grad(
+                                    chunk_features,
+                                    chunk_gain,
+                                    chunk_vad,
+                                    state,
+                                    fixed_chunk_features,
+                                    fixed_conv1_workspace,
+                                )
+                            else:
+                                loss, state, gradients = next_chunk_grad(
+                                    chunk_features, chunk_gain, chunk_vad, state
+                                )
                     phase_timings.append({
                         "phase": "gradient_graph",
                         "seconds": time.perf_counter() - gradient_started,

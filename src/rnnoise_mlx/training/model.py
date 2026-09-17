@@ -80,6 +80,69 @@ class RNNoise(nn.Module):
         )
         return gain, vad, new_state
 
+    def first_chunk_fixed(self, feature_workspace, features, conv1_workspace):
+        """Run the first chunk through preallocated temporal workspaces.
+
+        The first two positions are zero history.  Keeping those positions in
+        the same arrays as the following chunks avoids constructing a temporal
+        ``concatenate`` graph for the causal convolutions.
+        """
+        feature_workspace = mx.slice_update(
+            feature_workspace,
+            features,
+            mx.array(2),
+            axes=(1,),
+        )
+        conv1_full = mx.tanh(self.conv1(feature_workspace))
+        conv1_workspace = mx.slice_update(
+            conv1_workspace, conv1_full, mx.array(2), axes=(1,)
+        )
+        conv2_full = mx.tanh(self.conv2(conv1_workspace))
+        gain, vad, recurrent = self._recurrent_outputs(conv2_full)
+        state = (
+            feature_workspace[..., -2:, :],
+            conv1_workspace[..., -2:, :],
+            recurrent[0],
+            recurrent[1],
+            recurrent[2],
+        )
+        # Offset two accounts for the two zero causal-history frames.  The
+        # resulting 246 frames are exactly the shape of first_chunk().
+        return (
+            gain[..., 2:248, :],
+            vad[..., 2:248, :],
+            state,
+            feature_workspace,
+            conv1_workspace,
+        )
+
+    def next_chunk_fixed(self, feature_workspace, features, conv1_workspace, state):
+        """Run a following chunk using fixed-shape causal workspaces."""
+        feature_history, conv1_history, h1, h2, h3 = state
+        feature_workspace = mx.slice_update(
+            feature_workspace, feature_history, mx.array(0), axes=(1,)
+        )
+        feature_workspace = mx.slice_update(
+            feature_workspace, features, mx.array(2), axes=(1,)
+        )
+        conv1_workspace = mx.slice_update(
+            conv1_workspace, conv1_history, mx.array(0), axes=(1,)
+        )
+        conv1_full = mx.tanh(self.conv1(feature_workspace))
+        conv1_workspace = mx.slice_update(
+            conv1_workspace, conv1_full, mx.array(2), axes=(1,)
+        )
+        conv2 = mx.tanh(self.conv2(conv1_workspace))
+        gain, vad, recurrent = self._recurrent_outputs(conv2, (h1, h2, h3))
+        new_state = (
+            feature_workspace[..., -2:, :],
+            conv1_workspace[..., -2:, :],
+            recurrent[0],
+            recurrent[1],
+            recurrent[2],
+        )
+        return gain, vad, new_state, feature_workspace, conv1_workspace
+
     def save(self, path: str):
         flat = dict(mlx_utils.tree_flatten(self.parameters()))
         mx.save_safetensors(path, flat, metadata={"config": json.dumps(asdict(self.config))})
