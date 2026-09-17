@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from functools import partial
@@ -17,6 +17,11 @@ import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
+
+try:
+    import nvtx as _nvtx
+except ImportError:  # Optional profiling-only dependency.
+    _nvtx = None
 
 from .data import FeatureDataset
 from .checkpoint import _feature_identity, load_checkpoint, save_checkpoint
@@ -192,17 +197,27 @@ def train(
     output.mkdir(parents=True, exist_ok=True)
     phase_timings: list[dict[str, object]] = []
 
+    nvtx_enabled = _nvtx is not None and os.environ.get("RNNOISE_MLX_NVTX") == "1"
+
+    def nvtx_range(name: str, **metadata):
+        if not nvtx_enabled:
+            return nullcontext()
+        details = ",".join(f"{key}={value}" for key, value in sorted(metadata.items()))
+        message = f"rnnoise:{name}" + (f" [{details}]" if details else "")
+        return _nvtx.annotate(message)
+
     @contextmanager
     def measure_phase(name: str, **metadata):
         started = time.perf_counter()
-        try:
-            yield
-        finally:
-            phase_timings.append({
-                "phase": name,
-                "seconds": time.perf_counter() - started,
-                **metadata,
-            })
+        with nvtx_range(name, **metadata):
+            try:
+                yield
+            finally:
+                phase_timings.append({
+                    "phase": name,
+                    "seconds": time.perf_counter() - started,
+                    **metadata,
+                })
 
     def write_phase_timings() -> None:
         if args.timing_path is not None:
@@ -501,19 +516,25 @@ def train(
                     chunk_features = features[:, start:end, :]
                     is_first_chunk = start == 0 or segment_state == "reset"
                     gradient_started = time.perf_counter()
-                    if is_first_chunk:
-                        target_start = start + 3
-                        chunk_gain = gain[:, target_start : end - 1, :]
-                        chunk_vad = vad[:, target_start : end - 1, :]
-                        loss, state, gradients = first_chunk_grad(
-                            chunk_features, chunk_gain, chunk_vad
-                        )
-                    else:
-                        chunk_gain = gain[:, start - 1 : end - 1, :]
-                        chunk_vad = vad[:, start - 1 : end - 1, :]
-                        loss, state, gradients = next_chunk_grad(
-                            chunk_features, chunk_gain, chunk_vad, state
-                        )
+                    with nvtx_range(
+                        "gradient_graph",
+                        update=update + 1,
+                        chunk_start=start,
+                        chunk_length=end - start,
+                    ):
+                        if is_first_chunk:
+                            target_start = start + 3
+                            chunk_gain = gain[:, target_start : end - 1, :]
+                            chunk_vad = vad[:, target_start : end - 1, :]
+                            loss, state, gradients = first_chunk_grad(
+                                chunk_features, chunk_gain, chunk_vad
+                            )
+                        else:
+                            chunk_gain = gain[:, start - 1 : end - 1, :]
+                            chunk_vad = vad[:, start - 1 : end - 1, :]
+                            loss, state, gradients = next_chunk_grad(
+                                chunk_features, chunk_gain, chunk_vad, state
+                            )
                     phase_timings.append({
                         "phase": "gradient_graph",
                         "seconds": time.perf_counter() - gradient_started,
