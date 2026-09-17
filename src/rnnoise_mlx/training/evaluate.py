@@ -17,8 +17,8 @@ def evaluate(model, dataset: FeatureDataset, batch_size: int, gamma: float = 0.2
     in_range = True
     # Evaluation order is fixed and does not update model state or weights.
     for features, gain, vad in dataset.batches(batch_size, np.random.default_rng(0)):
-        predicted_gain, predicted_vad, _ = model(mx.array(features))
-        losses = rnnoise_loss(predicted_gain, predicted_vad, mx.array(gain), mx.array(vad), gamma)
+        predicted_gain, predicted_vad, _ = model(features)
+        losses = rnnoise_loss(predicted_gain, predicted_vad, gain, vad, gamma)
         mx.eval(predicted_gain, predicted_vad, *losses)
         values = np.array([value.item() for value in losses], dtype=np.float64)
         totals += values

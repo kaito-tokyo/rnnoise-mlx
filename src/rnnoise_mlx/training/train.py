@@ -460,18 +460,18 @@ def train(
                 for start in chunk_ranges:
                     end = min(start + args.training_chunk_length, args.sequence_length)
                     end = start + segment_length
-                    chunk_features = mx.asarray(features[:, start:end, :])
+                    chunk_features = features[:, start:end, :]
                     is_first_chunk = start == 0 or segment_state == "reset"
                     if is_first_chunk:
                         target_start = start + 3
-                        chunk_gain = mx.asarray(gain[:, target_start : end - 1, :])
-                        chunk_vad = mx.asarray(vad[:, target_start : end - 1, :])
+                        chunk_gain = gain[:, target_start : end - 1, :]
+                        chunk_vad = vad[:, target_start : end - 1, :]
                         loss, state, gradients = first_chunk_grad(
                             chunk_features, chunk_gain, chunk_vad
                         )
                     else:
-                        chunk_gain = mx.asarray(gain[:, start - 1 : end - 1, :])
-                        chunk_vad = mx.asarray(vad[:, start - 1 : end - 1, :])
+                        chunk_gain = gain[:, start - 1 : end - 1, :]
+                        chunk_vad = vad[:, start - 1 : end - 1, :]
                         loss, state, gradients = next_chunk_grad(
                             chunk_features, chunk_gain, chunk_vad, state
                         )
@@ -508,21 +508,21 @@ def train(
                 for start in chunk_ranges:
                     if args.stateful_tbptt:
                         end = min(start + args.training_chunk_length, args.sequence_length)
-                        chunk_features = mx.asarray(features[:, start:end, :])
+                        chunk_features = features[:, start:end, :]
                         if start == 0 or segment_state == "reset":
                             target_start = start + 3
-                            chunk_gain = mx.asarray(gain[:, target_start : end - 1, :])
-                            chunk_vad = mx.asarray(vad[:, target_start : end - 1, :])
+                            chunk_gain = gain[:, target_start : end - 1, :]
+                            chunk_vad = vad[:, target_start : end - 1, :]
                             loss, state = first_chunk_step(chunk_features, chunk_gain, chunk_vad)
                         else:
-                            chunk_gain = mx.asarray(gain[:, start - 1 : end - 1, :])
-                            chunk_vad = mx.asarray(vad[:, start - 1 : end - 1, :])
+                            chunk_gain = gain[:, start - 1 : end - 1, :]
+                            chunk_vad = vad[:, start - 1 : end - 1, :]
                             loss, state = next_chunk_step(
                                 chunk_features, chunk_gain, chunk_vad, state
                             )
                         state = tuple(mx.stop_gradient(value) for value in state)
                     else:
-                        loss = train_step(mx.asarray(features), mx.asarray(gain), mx.asarray(vad))
+                        loss = train_step(features, gain, vad)
 
                     update += 1
                     processed_frames += args.batch_size * (
