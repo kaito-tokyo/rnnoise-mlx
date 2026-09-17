@@ -46,6 +46,44 @@ def summarize(values: list[int], *, small_threshold: int) -> dict[str, float | i
     }
 
 
+def summarize_gaps(values: list[int]) -> dict[str, float | int | None]:
+    if not values:
+        return {"count": 0, "mean_ns": None, "median_ns": None, "p95_ns": None}
+    return {
+        "count": len(values),
+        "mean_ns": sum(values) / len(values),
+        "median_ns": percentile(values, 0.50),
+        "p95_ns": percentile(values, 0.95),
+        "min_ns": min(values),
+        "max_ns": max(values),
+    }
+
+
+def size_histogram(values: list[int]) -> dict[str, int]:
+    bins = {
+        "0-4KiB": 0,
+        "4-16KiB": 0,
+        "16-64KiB": 0,
+        "64-256KiB": 0,
+        "256KiB-1MiB": 0,
+        ">1MiB": 0,
+    }
+    for value in values:
+        if value <= 4 * 1024:
+            bins["0-4KiB"] += 1
+        elif value <= 16 * 1024:
+            bins["4-16KiB"] += 1
+        elif value <= 64 * 1024:
+            bins["16-64KiB"] += 1
+        elif value <= 256 * 1024:
+            bins["64-256KiB"] += 1
+        elif value <= 1024 * 1024:
+            bins["256KiB-1MiB"] += 1
+        else:
+            bins[">1MiB"] += 1
+    return bins
+
+
 def load_phase_counts(path: Path | None) -> dict[str, int | None]:
     if path is None:
         return {"updates": None, "mx_eval_calls": None, "chunks": None}
@@ -96,6 +134,7 @@ def main() -> None:
             "total_duration_ns": durations_by_kind[kind],
             "per_update_count": len(values) / updates if updates else None,
             "per_mx_eval_count": len(values) / eval_calls if eval_calls else None,
+            "size_histogram": size_histogram(values),
         }
         for kind, values in sorted(by_kind.items())
     }
@@ -113,7 +152,7 @@ def main() -> None:
         "transfer_count": total_count,
         "transfer_rate_per_update": total_count / updates if updates else None,
         "transfer_rate_per_mx_eval": total_count / eval_calls if eval_calls else None,
-        "inter_transfer_gap_ns": summarize(intervals, small_threshold=0),
+        "inter_transfer_gap_ns": summarize_gaps(intervals),
         "by_kind": kinds,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
