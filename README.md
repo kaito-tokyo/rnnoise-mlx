@@ -146,6 +146,8 @@ updates. It requires `--segmented-tbptt-length 250`, keeps the full-sequence
 update semantics, and is intentionally separate from `--compile`. The default
 `graph-mode dynamic` remains the reference path until CUDA Graph counts,
 memory, throughput, and loss/checkpoint equivalence have been compared.
+The recurrent carry is an explicit fixed-structure input/output of the chunk
+function; it is not rebuilt as a Python-side graph between chunks.
 
 The same training core is available to Python callers without constructing a
 CLI argument vector:

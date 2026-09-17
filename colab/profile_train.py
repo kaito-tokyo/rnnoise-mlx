@@ -28,19 +28,19 @@ def main() -> None:
         raise SystemExit(f"missing features: {features}")
 
     config = TrainConfig(
-            features=str(features),
-            output=args.output,
-            batch_size=args.batch_size,
-            sequence_length=2000,
-            segmented_tbptt_length=args.segmented_tbptt_length,
-            segmented_tbptt_state="carry",
-            graph_mode=args.graph_mode,
-            max_updates=args.max_updates,
-            checkpoint_every=args.max_updates,
-            sync_eval=True,
-            seed=141,
-            timing_path=args.timing_path,
-        )
+        features=str(features),
+        output=args.output,
+        batch_size=args.batch_size,
+        sequence_length=2000,
+        segmented_tbptt_length=args.segmented_tbptt_length,
+        segmented_tbptt_state="carry",
+        graph_mode=args.graph_mode,
+        max_updates=args.max_updates,
+        checkpoint_every=args.max_updates,
+        sync_eval=True,
+        seed=141,
+        timing_path=args.timing_path,
+    )
     summary = train(
         config,
         feature_identity=args.feature_identity,
