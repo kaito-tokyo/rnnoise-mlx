@@ -95,6 +95,44 @@ def load_phase_counts(path: Path | None) -> dict[str, int | None]:
     }
 
 
+def load_runtime_api_summary(connection: sqlite3.Connection) -> list[dict[str, int | str]]:
+    """Summarize CUDA Runtime API calls when the report contains names."""
+    tables = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    if "CUPTI_ACTIVITY_KIND_RUNTIME" not in tables:
+        return []
+    name_column = None
+    if "StringIds" in tables:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(StringIds)")
+        }
+        if {"id", "value"} <= columns:
+            name_column = "value"
+        elif {"id", "name"} <= columns:
+            name_column = "name"
+    if name_column is None:
+        rows = connection.execute(
+            "SELECT nameId, COUNT(*) FROM CUPTI_ACTIVITY_KIND_RUNTIME "
+            "GROUP BY nameId ORDER BY COUNT(*) DESC"
+        ).fetchall()
+        return [
+            {"name_id": int(name_id), "count": int(count)}
+            for name_id, count in rows
+        ]
+    rows = connection.execute(
+        f"SELECT COALESCE(s.{name_column}, CAST(r.nameId AS TEXT)), COUNT(*) "
+        "FROM CUPTI_ACTIVITY_KIND_RUNTIME r "
+        f"LEFT JOIN StringIds s ON s.id = r.nameId "
+        "GROUP BY r.nameId, s." + name_column + " ORDER BY COUNT(*) DESC"
+    ).fetchall()
+    return [{"name": str(name), "count": int(count)} for name, count in rows]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("report", type=Path, help="Nsight .sqlite report")
@@ -116,6 +154,7 @@ def main() -> None:
             ORDER BY start
             """
         ).fetchall()
+        runtime_api_summary = load_runtime_api_summary(connection)
 
     phases = load_phase_counts(args.phase_timings)
     by_kind: dict[str, list[int]] = {}
@@ -139,11 +178,12 @@ def main() -> None:
         for kind, values in sorted(by_kind.items())
     }
 
-    intervals = [start - previous_end for previous_end, start, *_ in zip(
-        [event[1] for event in events],
-        [event[0] for event in events[1:]],
-        strict=False,
-    )]
+    # Events from different CUDA streams overlap.  Negative gaps therefore do
+    # not represent a transfer stall; clamp them to zero for burst analysis.
+    intervals = [
+        max(0, int(current[0]) - int(previous[1]))
+        for previous, current in zip(events, events[1:])
+    ]
     report = {
         "report": str(args.report),
         "phase_timings": str(args.phase_timings) if args.phase_timings else None,
@@ -153,6 +193,13 @@ def main() -> None:
         "transfer_rate_per_update": total_count / updates if updates else None,
         "transfer_rate_per_mx_eval": total_count / eval_calls if eval_calls else None,
         "inter_transfer_gap_ns": summarize_gaps(intervals),
+        "runtime_api_summary": runtime_api_summary,
+        "classification": {
+            "confirmed_code_origin": False,
+            "candidate_boundary": "mx.eval and MLX/CUDA unified-memory synchronization",
+            "status": "additional_investigation",
+            "reason": "The trace has transfer/API events but no phase-correlated NVTX ranges.",
+        },
         "by_kind": kinds,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
