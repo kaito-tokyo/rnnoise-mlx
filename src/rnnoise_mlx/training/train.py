@@ -12,6 +12,7 @@ import os
 import signal
 from pathlib import Path
 import time
+from typing import Literal
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -52,6 +53,7 @@ class TrainConfig:
     # CUDA graph compilation is opt-in.  For segmented RNN TBPTT it can retain
     # substantially more memory than the uncompiled path.
     no_compile: bool = True
+    graph_mode: Literal["dynamic", "compiled_chunk"] = "dynamic"
     # Retained for checkpoint/config compatibility; training is always synchronous.
     sync_eval: bool = True
     stateful_tbptt: bool = False
@@ -104,6 +106,12 @@ def parse_args(argv=None) -> TrainConfig:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--eval-features")
     parser.add_argument("--training-chunk-length", type=int, default=200)
+    parser.add_argument(
+        "--graph-mode",
+        choices=("dynamic", "compiled_chunk"),
+        default="dynamic",
+        help="dynamic evaluation or fixed-shape compiled segmented chunks",
+    )
     compile_group = parser.add_mutually_exclusive_group()
     compile_group.add_argument(
         "--compile",
@@ -155,6 +163,8 @@ def parse_args(argv=None) -> TrainConfig:
         parser.error("segmented TBPTT and --stateful-tbptt are mutually exclusive")
     if args.checkpoint_every <= 0:
         parser.error("--checkpoint-every must be positive")
+    if args.graph_mode == "compiled_chunk" and not args.no_compile:
+        parser.error("--graph-mode compiled_chunk cannot be combined with --compile")
     return TrainConfig(**vars(args))
 
 
@@ -329,10 +339,19 @@ def train(
         segment_length <= 4 or args.sequence_length % segment_length != 0
     ):
         raise ValueError("segmented TBPTT length must be >4 and divide --sequence-length")
+    if args.graph_mode == "compiled_chunk":
+        if segment_length != 250:
+            raise ValueError("compiled_chunk requires segmented_tbptt_length=250")
+        if args.sequence_length % 250 != 0:
+            raise ValueError("compiled_chunk requires sequence_length divisible by 250")
 
-    if not args.no_compile:
+    use_compiled_chunk = args.graph_mode == "compiled_chunk"
+    if not args.no_compile or use_compiled_chunk:
         captured_state = [model.state, optimizer.state]
-        train_step = partial(mx.compile, inputs=captured_state, outputs=captured_state)(train_step)
+        if not use_compiled_chunk:
+            train_step = partial(
+                mx.compile, inputs=captured_state, outputs=captured_state
+            )(train_step)
 
     def stateful_objective(params, features, gain, vad, state, first):
         model.update(params)
@@ -375,6 +394,18 @@ def train(
             return tuple(multiply_gradient_tree(value, multiplier) for value in tree)
         return tree * multiplier
 
+    # In compiled_chunk mode these tree operations are part of the same
+    # fixed-structure MLX graph as the chunk outputs.  The Python recursion
+    # still describes the tree once, but the per-chunk arithmetic is emitted
+    # as MLX operations and can be reused for every 250-frame chunk.
+    scale_gradients = multiply_gradient_tree
+    accumulate_gradients = add_gradient_trees
+    average_gradients = divide_gradient_tree
+    if use_compiled_chunk:
+        scale_gradients = mx.compile(multiply_gradient_tree)
+        accumulate_gradients = mx.compile(add_gradient_trees)
+        average_gradients = mx.compile(divide_gradient_tree)
+
     def first_chunk_grad(features, gain, vad):
         (loss, state), gradients = stateful_value_and_grad(
             model.trainable_parameters(), features, gain, vad, (), True
@@ -397,19 +428,27 @@ def train(
         optimizer.update(model, gradients)
         return loss, new_state
 
-    if not args.no_compile:
+    def apply_optimizer(gradients):
+        optimizer.update(model, gradients)
+
+    if not args.no_compile or use_compiled_chunk:
         first_chunk_grad = partial(
             mx.compile, inputs=captured_state, outputs=captured_state
         )(first_chunk_grad)
         next_chunk_grad = partial(
             mx.compile, inputs=captured_state, outputs=captured_state
         )(next_chunk_grad)
-        first_chunk_step = partial(
-            mx.compile, inputs=captured_state, outputs=captured_state
-        )(first_chunk_step)
-        next_chunk_step = partial(
-            mx.compile, inputs=captured_state, outputs=captured_state
-        )(next_chunk_step)
+        if not use_compiled_chunk:
+            first_chunk_step = partial(
+                mx.compile, inputs=captured_state, outputs=captured_state
+            )(first_chunk_step)
+            next_chunk_step = partial(
+                mx.compile, inputs=captured_state, outputs=captured_state
+            )(next_chunk_step)
+        if use_compiled_chunk:
+            apply_optimizer = partial(
+                mx.compile, inputs=captured_state, outputs=captured_state
+            )(apply_optimizer)
     pending_losses = []
     started = time.monotonic()
 
@@ -549,11 +588,11 @@ def train(
                         # gradient accumulation more concrete.  Keep loss
                         # lazy until the update-level evaluation below.
                         mx.eval(state, gradients)
-                    weighted_gradients = multiply_gradient_tree(gradients, chunk_frames)
+                    weighted_gradients = scale_gradients(gradients, chunk_frames)
                     accumulated_gradients = (
                         weighted_gradients
                         if accumulated_gradients is None
-                        else add_gradient_trees(accumulated_gradients, weighted_gradients)
+                        else accumulate_gradients(accumulated_gradients, weighted_gradients)
                     )
                     accumulated_loss = (
                         loss * chunk_frames
@@ -562,9 +601,9 @@ def train(
                     )
                     target_frames += chunk_frames
                     state = tuple(mx.stop_gradient(value) for value in state)
-                gradients = divide_gradient_tree(accumulated_gradients, target_frames)
+                gradients = average_gradients(accumulated_gradients, target_frames)
                 with measure_phase("optimizer_update", update=update + 1):
-                    optimizer.update(model, gradients)
+                    apply_optimizer(gradients)
                 loss = accumulated_loss / target_frames
                 update += 1
                 processed_frames += args.batch_size * features.shape[1]

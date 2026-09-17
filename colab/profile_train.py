@@ -15,6 +15,9 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--max-updates", type=int, default=20)
     parser.add_argument("--segmented-tbptt-length", type=int, default=250)
+    parser.add_argument(
+        "--graph-mode", choices=("dynamic", "compiled_chunk"), default="dynamic"
+    )
     parser.add_argument("--feature-identity", required=True)
     parser.add_argument("--evaluation-feature-identity")
     parser.add_argument("--timing-path", type=Path)
@@ -31,6 +34,7 @@ def main() -> None:
             sequence_length=2000,
             segmented_tbptt_length=args.segmented_tbptt_length,
             segmented_tbptt_state="carry",
+            graph_mode=args.graph_mode,
             max_updates=args.max_updates,
             checkpoint_every=args.max_updates,
             sync_eval=True,

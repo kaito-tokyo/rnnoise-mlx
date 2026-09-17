@@ -139,6 +139,14 @@ less GPU memory for this segmented RNN workload. Use `--compile` only when its
 performance and memory impact has been measured for the selected batch and
 segment sizes; `--no-compile` remains accepted and is the default.
 
+For fixed 250-frame segmented TBPTT experiments, `--graph-mode compiled_chunk`
+is the graph-reuse diagnostic path. It compiles the fixed-shape first-chunk,
+next-chunk, and optimizer-update functions separately and reuses them across
+updates. It requires `--segmented-tbptt-length 250`, keeps the full-sequence
+update semantics, and is intentionally separate from `--compile`. The default
+`graph-mode dynamic` remains the reference path until CUDA Graph counts,
+memory, throughput, and loss/checkpoint equivalence have been compared.
+
 The same training core is available to Python callers without constructing a
 CLI argument vector:
 
