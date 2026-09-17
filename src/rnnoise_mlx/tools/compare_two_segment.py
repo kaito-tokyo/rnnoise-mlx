@@ -9,7 +9,7 @@ import mlx.core as mx
 import numpy as np
 
 from rnnoise_mlx.training.data import FeatureDataset
-from rnnoise_mlx.training.loss import rnnoise_loss
+from rnnoise_mlx.training.old_impl import rnnoise_loss
 from rnnoise_mlx.training.model import ModelConfig, RNNoise
 
 

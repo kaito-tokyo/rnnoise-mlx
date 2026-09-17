@@ -14,8 +14,9 @@ import mlx.optimizers as optim
 import numpy as np
 
 from .data import FeatureDataset
-from .loss import rnnoise_loss_aligned
-from .model import ModelConfig, RNNoise
+from .old_impl import rnnoise_loss_aligned
+from .config import ModelConfig
+from .model import RNNoise
 
 LAYERS = ("conv1", "conv2", "gru1", "gru2", "gru3", "gain", "vad")
 RESET_MODES = ("all", "conv", "gru1", "gru2", "gru3", "gru12", "gru123")

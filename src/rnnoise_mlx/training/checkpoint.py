@@ -13,11 +13,24 @@ from typing import Any
 import mlx.core as mx
 from mlx.utils import tree_flatten, tree_unflatten
 
-from .model import ModelConfig, RNNoise
+from .config import ModelConfig
+from .model import RNNoise
 
 
 FORMAT_VERSION = 1
 _AUTO_IDENTITY = object()
+
+
+def save_model(model, path: str) -> None:
+    flat = dict(tree_flatten(model.parameters()))
+    mx.save_safetensors(path, flat)
+
+
+def load_model(model_cls, path: str, config, **model_kwargs):
+    model = model_cls(config, **model_kwargs)
+    model.load_weights(path)
+    mx.eval(model.parameters())
+    return model
 
 
 def _flat_state(state: Any) -> dict[str, mx.array]:

@@ -7,7 +7,7 @@ import mlx.core as mx
 import numpy as np
 
 from .data import FeatureDataset
-from .loss import rnnoise_loss
+from .old_impl import rnnoise_loss_aligned
 
 
 def evaluate(model, dataset: FeatureDataset, batch_size: int, gamma: float = 0.25):
@@ -18,7 +18,9 @@ def evaluate(model, dataset: FeatureDataset, batch_size: int, gamma: float = 0.2
     # Evaluation order is fixed and does not update model state or weights.
     for features, gain, vad in dataset.batches(batch_size, np.random.default_rng(0)):
         predicted_gain, predicted_vad, _ = model(features)
-        losses = rnnoise_loss(predicted_gain, predicted_vad, gain, vad, gamma)
+        losses = rnnoise_loss_aligned(
+            predicted_gain, predicted_vad, gain[:, 3:-1, :], vad[:, 3:-1, :], gamma
+        )
         mx.eval(predicted_gain, predicted_vad, *losses)
         values = np.array([value.item() for value in losses], dtype=np.float64)
         totals += values

@@ -1,12 +1,17 @@
-"""RNNoise-compatible training loss functions."""
+"""Legacy training and evaluation helpers."""
 
 import mlx.core as mx
 
 
 def rnnoise_loss(pred_gain, pred_vad, gain, vad, gamma: float = 0.25):
-    gain = gain[:, 3:-1, :]
-    vad = vad[:, 3:-1, :]
-    return rnnoise_loss_aligned(pred_gain, pred_vad, gain, vad, gamma)
+    """Legacy loss for the non-CUDA model implementation."""
+    return rnnoise_loss_aligned(
+        pred_gain,
+        pred_vad,
+        gain[:, 3:-1, :],
+        vad[:, 3:-1, :],
+        gamma,
+    )
 
 
 def rnnoise_loss_aligned(pred_gain, pred_vad, gain, vad, gamma: float = 0.25):

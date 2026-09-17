@@ -5,14 +5,13 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager, nullcontext
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from functools import partial
 import json
 import os
 import signal
 from pathlib import Path
 import time
-from typing import Literal
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -25,71 +24,28 @@ except ImportError:  # Optional profiling-only dependency.
     _nvtx = None
 
 from .data import FeatureDataset
-from .checkpoint import _feature_identity, load_checkpoint, save_checkpoint
+from .checkpoint import (
+    _feature_identity,
+    load_checkpoint,
+    load_model,
+    save_checkpoint,
+    save_model,
+)
 from .evaluate import evaluate
-from .loss import rnnoise_loss, rnnoise_loss_aligned
-from .model import ModelConfig, RNNoise
+from .old_impl import rnnoise_loss_aligned
+from .config import ModelConfig
+from ..training_cuda.graph import RNNoise
+from ..training_tools import (
+    TrainConfig,
+    TrainingCheckpoint,
+    TrainingEvent,
+    TrainingProgress,
+)
+from ..training_cuda import FixedChunkWorkspace, validate_compiled_chunk
+from ..training_cuda.executor import CompiledChunkRunner
 
 
 _IDENTITY_NOT_PROVIDED = object()
-
-
-@dataclass
-class TrainConfig:
-    """Configuration for one training run, independent of CLI parsing."""
-
-    features: str
-    output: str
-    batch_size: int = 8
-    sequence_length: int = 2000
-    epochs: int = 200
-    max_updates: int | None = None
-    learning_rate: float = 1e-3
-    lr_decay: float = 5e-5
-    gamma: float = 0.25
-    seed: int = 0
-    eval_features: str | None = None
-    training_chunk_length: int = 200
-    # CUDA graph compilation is opt-in.  For segmented RNN TBPTT it can retain
-    # substantially more memory than the uncompiled path.
-    no_compile: bool = True
-    graph_mode: Literal["dynamic", "compiled_chunk"] = "dynamic"
-    # Retained for checkpoint/config compatibility; training is always synchronous.
-    sync_eval: bool = True
-    stateful_tbptt: bool = False
-    two_segment_tbptt: str | None = None
-    segmented_tbptt_length: int | None = None
-    segmented_tbptt_state: str = "carry"
-    equalize_reset_targets: bool = False
-    checkpoint_every: int = 32
-    resume_from: Path | None = None
-    timing_path: Path | None = None
-
-
-@dataclass(frozen=True)
-class TrainingProgress:
-    """Materialized progress for one completed optimizer update."""
-
-    update: int
-    epoch: int
-    loss: float
-    learning_rate: float
-    processed_frames: int
-
-
-@dataclass(frozen=True)
-class TrainingCheckpoint:
-    """Notification emitted after a checkpoint is durably written."""
-
-    update: int
-    path: Path
-    next_epoch: int
-    next_batch: int
-    processed_frames: int
-    elapsed_seconds: float
-
-
-TrainingEvent = TrainingProgress | TrainingCheckpoint
 
 
 def parse_args(argv=None) -> TrainConfig:
@@ -239,7 +195,11 @@ def train(
     (output / "model-config.json").write_text(
         json.dumps(asdict(config), indent=2, sort_keys=True) + "\n"
     )
-    model = RNNoise(config)
+    model = RNNoise(
+        config,
+        batch_size=args.batch_size,
+        tbptt_length=args.segmented_tbptt_length or 250,
+    )
     learning_rate = lambda step: args.learning_rate / (1 + args.lr_decay * step)
     optimizer = optim.AdamW(learning_rate=learning_rate, betas=(0.8, 0.98), eps=1e-8)
     history = []
@@ -321,7 +281,7 @@ def train(
 
     def objective(model, features, gain, vad):
         pred_gain, pred_vad, _ = model(features)
-        return rnnoise_loss(pred_gain, pred_vad, gain, vad, args.gamma)[0]
+        return rnnoise_loss_aligned(pred_gain, pred_vad, gain[:, 3:-1, :], vad[:, 3:-1, :], args.gamma)[0]
 
     value_and_grad = nn.value_and_grad(model, objective)
 
@@ -339,11 +299,7 @@ def train(
         segment_length <= 4 or args.sequence_length % segment_length != 0
     ):
         raise ValueError("segmented TBPTT length must be >4 and divide --sequence-length")
-    if args.graph_mode == "compiled_chunk":
-        if segment_length != 250:
-            raise ValueError("compiled_chunk requires segmented_tbptt_length=250")
-        if args.sequence_length % 250 != 0:
-            raise ValueError("compiled_chunk requires sequence_length divisible by 250")
+    validate_compiled_chunk(args, segment_length)
 
     use_compiled_chunk = args.graph_mode == "compiled_chunk"
     if not args.no_compile or use_compiled_chunk:
@@ -425,10 +381,14 @@ def train(
     scale_gradients = multiply_gradient_tree
     accumulate_gradients = add_gradient_trees
     average_gradients = divide_gradient_tree
+    compiled_runner = None
     if use_compiled_chunk:
-        scale_gradients = mx.compile(multiply_gradient_tree)
-        accumulate_gradients = mx.compile(add_gradient_trees)
-        average_gradients = mx.compile(divide_gradient_tree)
+        compiled_runner = CompiledChunkRunner(
+            model, optimizer, args.gamma, captured_state
+        )
+        scale_gradients = compiled_runner.scale_gradients
+        accumulate_gradients = compiled_runner.accumulate_gradients
+        average_gradients = compiled_runner.average_gradients
 
     def first_chunk_grad(features, gain, vad, feature_workspace=(), conv1_workspace=()):
         (loss, state, feature_workspace, conv1_workspace), gradients = stateful_value_and_grad(
@@ -491,7 +451,7 @@ def train(
     def apply_optimizer(gradients):
         optimizer.update(model, gradients)
 
-    if not args.no_compile or use_compiled_chunk:
+    if not args.no_compile and not use_compiled_chunk:
         first_chunk_grad = partial(
             mx.compile, inputs=captured_state, outputs=captured_state
         )(first_chunk_grad)
@@ -505,10 +465,10 @@ def train(
             next_chunk_step = partial(
                 mx.compile, inputs=captured_state, outputs=captured_state
             )(next_chunk_step)
-        if use_compiled_chunk:
-            apply_optimizer = partial(
-                mx.compile, inputs=captured_state, outputs=captured_state
-            )(apply_optimizer)
+    if use_compiled_chunk:
+        first_chunk_grad = compiled_runner.first_grad
+        next_chunk_grad = compiled_runner.next_grad
+        apply_optimizer = compiled_runner.apply_optimizer
     pending_losses = []
     started = time.monotonic()
 
@@ -596,21 +556,9 @@ def train(
         for features, gain, vad in batches_for_epoch(epoch, first_batch):
             batch_started = time.perf_counter()
             if segment_length:
-                fixed_chunk_features = None
-                fixed_conv1_workspace = None
+                fixed_workspace = None
                 if use_compiled_chunk:
-                    if segment_length != 250:
-                        raise ValueError(
-                            "compiled_chunk requires a fixed 250-frame workspace"
-                        )
-                    fixed_chunk_features = mx.zeros(
-                        (features.shape[0], 252, features.shape[2]),
-                        dtype=features.dtype,
-                    )
-                    fixed_conv1_workspace = mx.zeros(
-                        (features.shape[0], 252, model.config.cond_size),
-                        dtype=features.dtype,
-                    )
+                    fixed_workspace = FixedChunkWorkspace.allocate(features)
                 state = None
                 chunk_ranges = range(0, args.sequence_length, segment_length)
             elif args.stateful_tbptt:
@@ -637,34 +585,36 @@ def train(
                         chunk_length=end - start,
                     ):
                         if is_first_chunk:
-                            target_start = start + 3
-                            chunk_gain = gain[:, target_start : end - 1, :]
-                            chunk_vad = vad[:, target_start : end - 1, :]
                             if use_compiled_chunk:
-                                loss, state, gradients, fixed_chunk_features, fixed_conv1_workspace = first_chunk_grad(
+                                chunk_gain = gain[:, start:end, :]
+                                chunk_vad = vad[:, start:end, :]
+                                loss, state, gradients, fixed_workspace.features = first_chunk_grad(
                                     chunk_features,
                                     chunk_gain,
                                     chunk_vad,
-                                    fixed_chunk_features,
-                                    fixed_conv1_workspace,
+                                    fixed_workspace.features,
                                 )
                             else:
+                                target_start = start + 3
+                                chunk_gain = gain[:, target_start : end - 1, :]
+                                chunk_vad = vad[:, target_start : end - 1, :]
                                 loss, state, gradients = first_chunk_grad(
                                     chunk_features, chunk_gain, chunk_vad
                                 )
                         else:
-                            chunk_gain = gain[:, start - 1 : end - 1, :]
-                            chunk_vad = vad[:, start - 1 : end - 1, :]
                             if use_compiled_chunk:
-                                loss, state, gradients, fixed_chunk_features, fixed_conv1_workspace = next_chunk_grad(
+                                chunk_gain = gain[:, start:end, :]
+                                chunk_vad = vad[:, start:end, :]
+                                loss, state, gradients, fixed_workspace.features = next_chunk_grad(
                                     chunk_features,
                                     chunk_gain,
                                     chunk_vad,
                                     state,
-                                    fixed_chunk_features,
-                                    fixed_conv1_workspace,
+                                    fixed_workspace.features,
                                 )
                             else:
+                                chunk_gain = gain[:, start - 1 : end - 1, :]
+                                chunk_vad = vad[:, start - 1 : end - 1, :]
                                 loss, state, gradients = next_chunk_grad(
                                     chunk_features, chunk_gain, chunk_vad, state
                                 )
@@ -800,9 +750,14 @@ def train(
         (output / "training.json").write_text(json.dumps(summary, indent=2) + "\n")
         return
 
-    model.save(str(output / "model.safetensors"))
+    save_model(model, str(output / "model.safetensors"))
     trained_evaluation = evaluate(model, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
-    reloaded = RNNoise.load(str(output / "model.safetensors"), config)
+    reloaded = load_model(
+        RNNoise,
+        str(output / "model.safetensors"),
+        config,
+        batch_size=args.batch_size,
+    )
     reloaded_evaluation = evaluate(reloaded, eval_dataset, args.batch_size, args.gamma) if eval_dataset else None
     reload_matches = trained_evaluation == reloaded_evaluation
     if stop_requested:

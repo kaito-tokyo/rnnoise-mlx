@@ -9,7 +9,7 @@ import numpy as np
 
 from rnnoise_mlx.tools.export_canonical_weights import export_checkpoint
 from rnnoise_mlx.tools.rnnoise_weights import infer_streaming, read_weights
-from rnnoise_mlx.training.loss import rnnoise_loss
+from rnnoise_mlx.training.old_impl import rnnoise_loss
 from rnnoise_mlx.training.model import ModelConfig, RNNoise
 
 

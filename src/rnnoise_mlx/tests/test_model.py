@@ -6,7 +6,7 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from rnnoise_mlx.training.loss import rnnoise_loss
+from rnnoise_mlx.training.old_impl import rnnoise_loss
 from rnnoise_mlx.training.model import ModelConfig, RNNoise
 from rnnoise_mlx.training.state_diagnostics import stale_state_diagnostic, trace_chunks
 from rnnoise_mlx.training.tracking import _flatten_metrics

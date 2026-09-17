@@ -1,6 +1,7 @@
 """Model, dataset, evaluation, diagnostics, and training implementation."""
 
-from .model import ModelConfig, RNNoise
+from .config import ModelConfig
+from .model import RNNoise
 from .train import (
     TrainConfig,
     TrainingCheckpoint,
