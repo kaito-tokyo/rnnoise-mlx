@@ -543,7 +543,12 @@ def train(
                     })
                     chunk_frames = chunk_gain.shape[1]
                     with measure_phase("mx_eval", update=update + 1, chunk_start=start):
-                        mx.eval(loss, state, gradients)
+                        # ``gradients`` depend on ``loss`` already.  Evaluating
+                        # loss as a separate root here adds a scalar output to
+                        # every chunk boundary without making state carry or
+                        # gradient accumulation more concrete.  Keep loss
+                        # lazy until the update-level evaluation below.
+                        mx.eval(state, gradients)
                     weighted_gradients = multiply_gradient_tree(gradients, chunk_frames)
                     accumulated_gradients = (
                         weighted_gradients
