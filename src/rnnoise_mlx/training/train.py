@@ -536,6 +536,24 @@ def train(
         for features, gain, vad in batches_for_epoch(epoch, first_batch):
             batch_started = time.perf_counter()
             if segment_length:
+                fixed_chunk_features = None
+                fixed_chunk_gain = None
+                fixed_chunk_vad = None
+                if use_compiled_chunk:
+                    if segment_length != 250:
+                        raise ValueError(
+                            "compiled_chunk requires a fixed 250-frame workspace"
+                        )
+                    fixed_chunk_features = mx.zeros(
+                        (features.shape[0], 250, features.shape[2]),
+                        dtype=features.dtype,
+                    )
+                    fixed_chunk_gain = mx.zeros(
+                        (gain.shape[0], 249, gain.shape[2]), dtype=gain.dtype
+                    )
+                    fixed_chunk_vad = mx.zeros(
+                        (vad.shape[0], 249, vad.shape[2]), dtype=vad.dtype
+                    )
                 state = None
                 chunk_ranges = range(0, args.sequence_length, segment_length)
             elif args.stateful_tbptt:
@@ -565,12 +583,22 @@ def train(
                             target_start = start + 3
                             chunk_gain = gain[:, target_start : end - 1, :]
                             chunk_vad = vad[:, target_start : end - 1, :]
+                            if use_compiled_chunk:
+                                fixed_chunk_features[:, :, :] = chunk_features
+                                chunk_features = fixed_chunk_features
                             loss, state, gradients = first_chunk_grad(
                                 chunk_features, chunk_gain, chunk_vad
                             )
                         else:
                             chunk_gain = gain[:, start - 1 : end - 1, :]
                             chunk_vad = vad[:, start - 1 : end - 1, :]
+                            if use_compiled_chunk:
+                                fixed_chunk_features[:, :, :] = chunk_features
+                                fixed_chunk_gain[:, :, :] = chunk_gain
+                                fixed_chunk_vad[:, :, :] = chunk_vad
+                                chunk_features = fixed_chunk_features
+                                chunk_gain = fixed_chunk_gain
+                                chunk_vad = fixed_chunk_vad
                             loss, state, gradients = next_chunk_grad(
                                 chunk_features, chunk_gain, chunk_vad, state
                             )
