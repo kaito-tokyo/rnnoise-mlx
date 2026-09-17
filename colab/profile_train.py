@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--segmented-tbptt-length", type=int, default=250)
     parser.add_argument("--feature-identity", required=True)
     parser.add_argument("--evaluation-feature-identity")
+    parser.add_argument("--timing-path", type=Path)
     args = parser.parse_args()
 
     features = Path(args.features)
@@ -34,6 +35,7 @@ def main() -> None:
             checkpoint_every=args.max_updates,
             sync_eval=True,
             seed=141,
+            timing_path=args.timing_path,
         )
     summary = train(
         config,
