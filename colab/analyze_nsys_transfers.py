@@ -133,6 +133,34 @@ def load_runtime_api_summary(connection: sqlite3.Connection) -> list[dict[str, i
     return [{"name": str(name), "count": int(count)} for name, count in rows]
 
 
+def load_nvtx_ranges(connection: sqlite3.Connection) -> list[dict[str, int | float | str]]:
+    """Return application NVTX ranges emitted by the optional profiler hooks."""
+    tables = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    if not {"NVTX_EVENTS", "StringIds"} <= tables:
+        return []
+    rows = connection.execute(
+        "SELECT s.value, COUNT(*), SUM(n.end - n.start), "
+        "AVG(n.end - n.start) "
+        "FROM NVTX_EVENTS n JOIN StringIds s ON s.id = n.textId "
+        "WHERE s.value LIKE 'rnnoise:%' "
+        "GROUP BY s.value ORDER BY s.value"
+    ).fetchall()
+    return [
+        {
+            "label": str(label),
+            "count": int(count),
+            "total_duration_ns": int(total or 0),
+            "mean_duration_ns": float(mean or 0),
+        }
+        for label, count, total, mean in rows
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("report", type=Path, help="Nsight .sqlite report")
@@ -155,6 +183,7 @@ def main() -> None:
             """
         ).fetchall()
         runtime_api_summary = load_runtime_api_summary(connection)
+        nvtx_ranges = load_nvtx_ranges(connection)
 
     phases = load_phase_counts(args.phase_timings)
     by_kind: dict[str, list[int]] = {}
@@ -194,11 +223,16 @@ def main() -> None:
         "transfer_rate_per_mx_eval": total_count / eval_calls if eval_calls else None,
         "inter_transfer_gap_ns": summarize_gaps(intervals),
         "runtime_api_summary": runtime_api_summary,
+        "nvtx_ranges": nvtx_ranges,
         "classification": {
-            "confirmed_code_origin": False,
+            "confirmed_code_origin": bool(nvtx_ranges),
             "candidate_boundary": "mx.eval and MLX/CUDA unified-memory synchronization",
-            "status": "additional_investigation",
-            "reason": "The trace has transfer/API events but no phase-correlated NVTX ranges.",
+            "status": "phase_correlated" if nvtx_ranges else "additional_investigation",
+            "reason": (
+                "Application NVTX ranges are present; use their time intervals to correlate events."
+                if nvtx_ranges
+                else "The trace has transfer/API events but no phase-correlated NVTX ranges."
+            ),
         },
         "by_kind": kinds,
     }
