@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from functools import partial
@@ -55,6 +56,7 @@ class TrainConfig:
     equalize_reset_targets: bool = False
     checkpoint_every: int = 32
     resume_from: Path | None = None
+    timing_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +141,7 @@ def parse_args(argv=None) -> TrainConfig:
         type=Path,
         help="complete checkpoint directory to resume from",
     )
+    parser.add_argument("--timing-path", type=Path)
     args = parser.parse_args(argv)
 
     if args.two_segment_tbptt and args.segmented_tbptt_length:
@@ -187,6 +190,25 @@ def train(
     if dataset.sequence_count < args.batch_size:
         raise ValueError("feature dataset must contain at least one complete batch")
     output.mkdir(parents=True, exist_ok=True)
+    phase_timings: list[dict[str, object]] = []
+
+    @contextmanager
+    def measure_phase(name: str, **metadata):
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            phase_timings.append({
+                "phase": name,
+                "seconds": time.perf_counter() - started,
+                **metadata,
+            })
+
+    def write_phase_timings() -> None:
+        if args.timing_path is not None:
+            args.timing_path.parent.mkdir(parents=True, exist_ok=True)
+            args.timing_path.write_text(json.dumps(phase_timings, indent=2))
+
     mx.random.seed(args.seed)
     config = ModelConfig()
     (output / "model-config.json").write_text(
@@ -458,6 +480,7 @@ def train(
         first_batch = resume_batch if epoch == resume_epoch else 0
         batch_index = first_batch
         for features, gain, vad in batches_for_epoch(epoch, first_batch):
+            batch_started = time.perf_counter()
             if segment_length:
                 state = None
                 chunk_ranges = range(0, args.sequence_length, segment_length)
@@ -477,6 +500,7 @@ def train(
                     end = start + segment_length
                     chunk_features = features[:, start:end, :]
                     is_first_chunk = start == 0 or segment_state == "reset"
+                    gradient_started = time.perf_counter()
                     if is_first_chunk:
                         target_start = start + 3
                         chunk_gain = gain[:, target_start : end - 1, :]
@@ -490,8 +514,15 @@ def train(
                         loss, state, gradients = next_chunk_grad(
                             chunk_features, chunk_gain, chunk_vad, state
                         )
+                    phase_timings.append({
+                        "phase": "gradient_graph",
+                        "seconds": time.perf_counter() - gradient_started,
+                        "update": update + 1,
+                        "chunk_start": start,
+                    })
                     chunk_frames = chunk_gain.shape[1]
-                    mx.eval(loss, state, gradients)
+                    with measure_phase("mx_eval", update=update + 1, chunk_start=start):
+                        mx.eval(loss, state, gradients)
                     weighted_gradients = multiply_gradient_tree(gradients, chunk_frames)
                     accumulated_gradients = (
                         weighted_gradients
@@ -506,12 +537,14 @@ def train(
                     target_frames += chunk_frames
                     state = tuple(mx.stop_gradient(value) for value in state)
                 gradients = divide_gradient_tree(accumulated_gradients, target_frames)
-                optimizer.update(model, gradients)
+                with measure_phase("optimizer_update", update=update + 1):
+                    optimizer.update(model, gradients)
                 loss = accumulated_loss / target_frames
                 update += 1
                 processed_frames += args.batch_size * features.shape[1]
                 pending_losses.append((update, epoch, processed_frames, loss))
-                mx.eval(model.state, optimizer.state, loss)
+                with measure_phase("mx_eval_update", update=update):
+                    mx.eval(model.state, optimizer.state, loss)
                 if len(pending_losses) >= 10:
                     collect_pending()
                 if update % 32 == 0:
@@ -568,7 +601,8 @@ def train(
                 if next_batch >= dataset.sequence_count // args.batch_size:
                     next_epoch += 1
                     next_batch = 0
-                commit_checkpoint(next_epoch, next_batch)
+                with measure_phase("checkpoint", update=update):
+                    commit_checkpoint(next_epoch, next_batch)
                 checkpoint_due = False
                 checkpoint_committed = True
             last_batch_checkpoint_committed = checkpoint_committed
@@ -593,6 +627,7 @@ def train(
 
     collect_pending()
     mx.eval(model.state, optimizer.state)
+    write_phase_timings()
 
     training_elapsed = elapsed_before_resume + time.monotonic() - started
     if stop_requested:
