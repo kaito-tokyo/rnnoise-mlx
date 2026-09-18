@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import json
+import time
 from pathlib import Path
 
-from rnnoise_mlx.training import TrainConfig, train
+import mlx.core as mx
+import numpy as np
+
+from rnnoise_mlx.training.config import ModelConfig
+from rnnoise_mlx.training.data import FeatureDataset
+from rnnoise_mlx.training_cuda import CUDATrainingLoop
 
 
 def main() -> None:
@@ -27,25 +34,57 @@ def main() -> None:
     if not features.is_file():
         raise SystemExit(f"missing features: {features}")
 
-    config = TrainConfig(
-        features=str(features),
-        output=args.output,
+    output = Path(args.output)
+    output.mkdir(parents=True, exist_ok=True)
+    dataset = FeatureDataset(str(features), sequence_length=2000)
+    loop = CUDATrainingLoop.create(
+        ModelConfig(),
         batch_size=args.batch_size,
-        sequence_length=2000,
-        segmented_tbptt_length=args.segmented_tbptt_length,
-        segmented_tbptt_state="carry",
-        graph_mode=args.graph_mode,
-        max_updates=args.max_updates,
-        checkpoint_every=args.max_updates,
-        sync_eval=True,
-        seed=141,
-        timing_path=args.timing_path,
+        tbptt_length=args.segmented_tbptt_length,
     )
-    summary = train(
-        config,
-        feature_identity=args.feature_identity,
-        evaluation_feature_identity=args.evaluation_feature_identity,
+    rng = np.random.default_rng(141)
+    state = tuple(
+        mx.zeros((args.batch_size, ModelConfig.gru_size), dtype=mx.float32)
+        for _ in range(3)
     )
+    timings = []
+    losses = []
+    batches = dataset.batches(args.batch_size, rng)
+    for update in range(args.max_updates):
+        features_batch, target_gain, target_vad = next(batches)
+        started = time.perf_counter()
+        result = loop.run_update(
+            features_batch,
+            target_gain,
+            target_vad,
+            segment_length=args.segmented_tbptt_length,
+            state=state,
+        )
+        mx.eval(result.loss, result.state, loop.chunk.parameters(), loop.optimizer.state)
+        elapsed = time.perf_counter() - started
+        state = result.state
+        loss = float(result.loss.item())
+        losses.append(loss)
+        timings.append({"update": update + 1, "seconds": elapsed, "loss": loss})
+        print(
+            f"update={update + 1}/{args.max_updates} loss={loss:.6f} "
+            f"seconds={elapsed:.3f}",
+            flush=True,
+        )
+
+    summary = {
+        "feature_identity": args.feature_identity,
+        "batch_size": args.batch_size,
+        "sequence_length": 2000,
+        "segmented_tbptt_length": args.segmented_tbptt_length,
+        "updates": args.max_updates,
+        "losses": losses,
+        "timings": timings,
+    }
+    (output / "training_summary.json").write_text(json.dumps(summary, indent=2))
+    if args.timing_path:
+        args.timing_path.parent.mkdir(parents=True, exist_ok=True)
+        args.timing_path.write_text(json.dumps(timings, indent=2))
     print(summary, flush=True)
 
 
