@@ -118,7 +118,8 @@ class RNNoiseChunk(nn.Module):
         target = mx.maximum(target_dense_out, 0)
         target = target * mx.square(mx.tanh(8 * target))
         active = mx.minimum(target_dense_out + 1, 1)
-        error = predicted_dense_out**self.gamma - target**self.gamma
+        gamma = self.train_config.gamma
+        error = predicted_dense_out**gamma - target**gamma
         gain_loss = mx.mean((1 + 5 * target_vad) * active * mx.square(error))
         vad_weight = mx.abs(2 * target_vad - 1)
         vad_positive_loss = -target_vad * mx.log(0.01 + predicted_vad)
