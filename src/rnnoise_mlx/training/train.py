@@ -34,7 +34,7 @@ from .checkpoint import (
 from .evaluate import evaluate
 from .old_impl import rnnoise_loss_aligned
 from .config import ModelConfig
-from ..training_cuda.graph import RNNoise
+from .model import RNNoise
 from ..training_tools import (
     TrainConfig,
     TrainingCheckpoint,
@@ -195,11 +195,7 @@ def train(
     (output / "model-config.json").write_text(
         json.dumps(asdict(config), indent=2, sort_keys=True) + "\n"
     )
-    model = RNNoise(
-        config,
-        batch_size=args.batch_size,
-        tbptt_length=args.segmented_tbptt_length or 250,
-    )
+    model = RNNoise(config)
     learning_rate = lambda step: args.learning_rate / (1 + args.lr_decay * step)
     optimizer = optim.AdamW(learning_rate=learning_rate, betas=(0.8, 0.98), eps=1e-8)
     history = []

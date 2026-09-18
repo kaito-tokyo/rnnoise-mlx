@@ -7,33 +7,11 @@ construction itself lives in :mod:`training_cuda.graph`.
 from __future__ import annotations
 
 import mlx.core as mx
-
-def _tree_map_binary(left, right, operation):
-    if isinstance(left, dict):
-        return {key: _tree_map_binary(left[key], right[key], operation) for key in left}
-    if isinstance(left, list):
-        return [_tree_map_binary(a, b, operation) for a, b in zip(left, right)]
-    if isinstance(left, tuple):
-        return tuple(_tree_map_binary(a, b, operation) for a, b in zip(left, right))
-    return operation(left, right)
-
-
-def _tree_map_scalar(tree, scalar, operation):
-    if isinstance(tree, dict):
-        return {key: _tree_map_scalar(value, scalar, operation) for key, value in tree.items()}
-    if isinstance(tree, list):
-        return [_tree_map_scalar(value, scalar, operation) for value in tree]
-    if isinstance(tree, tuple):
-        return tuple(_tree_map_scalar(value, scalar, operation) for value in tree)
-    return operation(tree, scalar)
-
-
-
+from mlx.utils import tree_map
 
 class CompiledObjective:
     def __init__(self, model, gamma: float):
         self.model = model
-        self.gamma = gamma
 
     def __call__(self, params, features, gain, vad, state, feature_window, first):
         self.model.update(params)
@@ -42,27 +20,28 @@ class CompiledObjective:
                 feature_window, features, mx.array(4), axes=(1,)
             )
             zeros = mx.zeros(
-                (features.shape[0], self.model.config.gru_size),
+                (features.shape[0], self.model.model_config.gru_size),
                 dtype=features.dtype,
             )
-            predicted_gain, predicted_vad, h1, h2, h3 = self.model.step_graph(
+            predicted_gain, predicted_vad, gru1_state, gru2_state, gru3_state = self.model(
                 feature_window, zeros, zeros, zeros
             )
         else:
-            h1, h2, h3 = state
+            gru1_state, gru2_state, gru3_state = state
             feature_window = mx.slice_update(
                 feature_window, feature_window[:, -4:, :], mx.array(0), axes=(1,)
             )
             feature_window = mx.slice_update(
                 feature_window, features, mx.array(4), axes=(1,)
             )
-            predicted_gain, predicted_vad, h1, h2, h3 = self.model.step_graph(
-                feature_window, h1, h2, h3
+            predicted_gain, predicted_vad, gru1_state, gru2_state, gru3_state = self.model(
+                feature_window, gru1_state, gru2_state, gru3_state
             )
-        loss = self.model.loss_graph(
-            gain, vad, predicted_gain, predicted_vad, self.gamma
+        loss, *_ = self.model._objective(
+            features, gain, vad, gru1_state, gru2_state, gru3_state,
+            feature_window,
         )
-        return loss, h1, h2, h3, feature_window
+        return loss, gru1_state, gru2_state, gru3_state, feature_window
 
 
 class CompiledFirstGrad:
@@ -75,8 +54,8 @@ class CompiledFirstGrad:
             self.model.trainable_parameters(), features, gain, vad, (),
             feature_window, True
         )
-        loss, h1, h2, h3, feature_window = result
-        return loss, (h1, h2, h3), gradients, feature_window
+        loss, gru1_state, gru2_state, gru3_state, feature_window = result
+        return loss, (gru1_state, gru2_state, gru3_state), gradients, feature_window
 
 
 class CompiledNextGrad:
@@ -89,8 +68,8 @@ class CompiledNextGrad:
             self.model.trainable_parameters(), features, gain, vad, state,
             feature_window, False
         )
-        loss, h1, h2, h3, feature_window = result
-        return loss, (h1, h2, h3), gradients, feature_window
+        loss, gru1_state, gru2_state, gru3_state, feature_window = result
+        return loss, (gru1_state, gru2_state, gru3_state), gradients, feature_window
 
 
 class CompiledOptimizerUpdate:
@@ -120,13 +99,23 @@ class CompiledChunkRunner:
             inputs=captured_state, outputs=captured_state,
         )
         self.scale_gradients = mx.compile(
-            lambda tree, scalar: _tree_map_scalar(tree, scalar, lambda value, factor: value * factor)
+            lambda tree, scalar: tree_map(
+                lambda value: value * scalar,
+                tree,
+            )
         )
         self.accumulate_gradients = mx.compile(
-            lambda left, right: _tree_map_binary(left, right, lambda a, b: a + b)
+            lambda left, right: tree_map(
+                lambda a, b: a + b,
+                left,
+                right,
+            )
         )
         self.average_gradients = mx.compile(
-            lambda tree, divisor: _tree_map_scalar(tree, divisor, lambda value, d: value / d)
+            lambda tree, divisor: tree_map(
+                lambda value: value / divisor,
+                tree,
+            )
         )
 
     @staticmethod

@@ -2,134 +2,127 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+from typing import Optional as Opt
+
 import mlx.core as mx
 import mlx.nn as nn
+from mlx.utils import tree_map
 
-from ..training.config import ModelConfig
+from ..training.config import ModelConfig, TrainConfig
+
+
+class RNNoiseFrameStep(nn.Module):
+    """RNNoise frame/window computation and recurrent-state transition."""
+
+    def __init__(self, model_config: ModelConfig, train_config: Opt[TrainConfig]):
+        super().__init__()
+        assert model_config is not None
+        self.model_config = model_config
+        self.train_config = train_config
+        if train_config is None:
+            self.feature_shape = (1, 1, model_config.input_dim)
+            self.gru_shape = (1, model_config.gru_size)
+            self.conv1_state_shape = (1, 2, model_config.input_dim)
+            self.conv2_state_shape = (1, 2, model_config.cond_size)
+        else:
+            self.feature_shape = (train_config.batch_size, train_config.tbptt_length + 4, model_config.input_dim)
+            self.gru_shape = (train_config.batch_size, model_config.gru_size)
+        self.conv1 = nn.Conv1d(model_config.input_dim, model_config.cond_size, 3)
+        self.conv2 = nn.Conv1d(model_config.cond_size, model_config.gru_size, 3)
+        self.gru1 = nn.GRU(model_config.gru_size, model_config.gru_size)
+        self.gru2 = nn.GRU(model_config.gru_size, model_config.gru_size)
+        self.gru3 = nn.GRU(model_config.gru_size, model_config.gru_size)
+        self.dense_out = nn.Linear(4 * model_config.gru_size, model_config.output_dim)
+        self.vad = nn.Linear(4 * model_config.gru_size, 1)
+
+    def __call__(self, feature, gru1_state, gru2_state, gru3_state, conv1_state=None, conv2_state=None):
+        assert feature.shape == self.feature_shape
+        assert gru1_state.shape == self.gru_shape
+        assert gru2_state.shape == self.gru_shape
+        assert gru3_state.shape == self.gru_shape
+        if self.train_config is None:
+            assert conv1_state is not None and conv2_state is not None
+            assert conv1_state.shape == self.conv1_state_shape
+            assert conv2_state.shape == self.conv2_state_shape
+            conv1_input = mx.concatenate((conv1_state, feature), axis=1)
+            conv1 = mx.tanh(self.conv1(conv1_input))
+            next_conv1_state = conv1_input[:, -2:, :]
+            conv2_input = mx.concatenate((conv2_state, conv1), axis=1)
+            conv2 = mx.tanh(self.conv2(conv2_input))
+            next_conv2_state = conv2_input[:, -2:, :]
+        else:
+            assert conv1_state is None and conv2_state is None
+            conv1 = mx.tanh(self.conv1(feature))
+            conv2 = mx.tanh(self.conv2(conv1))
+            next_conv1_state = next_conv2_state = None
+        y1 = self.gru1(conv2, gru1_state)
+        next_gru1_state = y1[..., -1, :]
+        y2 = self.gru2(y1, gru2_state)
+        next_gru2_state = y2[..., -1, :]
+        y3 = self.gru3(y2, gru3_state)
+        next_gru3_state = y3[..., -1, :]
+        joined = mx.concatenate((conv2, y1, y2, y3), axis=-1)
+        return (mx.sigmoid(self.dense_out(joined)), mx.sigmoid(self.vad(joined)),
+                next_gru1_state, next_gru2_state, next_gru3_state,
+                next_conv1_state, next_conv2_state)
+
+
+class RNNoiseChunk(nn.Module):
+    """Compute one fixed-shape training chunk and its gradients."""
+
+    def __init__(self, model_config: ModelConfig, train_config: TrainConfig):
+        super().__init__()
+        assert model_config is not None and train_config is not None
+        self.model_config = model_config
+        self.train_config = train_config
+        self.gamma = train_config.gamma
+        self.step = RNNoiseFrameStep(model_config, train_config)
+
+    def __call__(self, feature_window, target_dense_out, target_vad, gru1_state, gru2_state, gru3_state):
+        return self.step(feature_window, gru1_state, gru2_state, gru3_state)
+
+    def calculate_loss(self, predicted_dense_out, predicted_vad, target_dense_out, target_vad):
+        target = mx.maximum(target_dense_out, 0)
+        target = target * mx.square(mx.tanh(8 * target))
+        active = mx.minimum(target_dense_out + 1, 1)
+        error = predicted_dense_out**self.gamma - target**self.gamma
+        gain_loss = mx.mean((1 + 5 * target_vad) * active * mx.square(error))
+        vad_loss = mx.mean(mx.abs(2 * target_vad - 1) * (
+            -target_vad * mx.log(0.01 + predicted_vad)
+            - (1 - target_vad) * mx.log(1.01 - predicted_vad)))
+        return gain_loss + 0.001 * vad_loss
+
+    def objective(self, feature_window, target_dense_out, target_vad, gru1_state, gru2_state, gru3_state):
+        model_out = self(feature_window, target_dense_out, target_vad, gru1_state, gru2_state, gru3_state)
+        return self.calculate_loss(model_out[0], model_out[1], target_dense_out, target_vad), model_out
+
+    def value_and_grad(self):
+        return nn.value_and_grad(self, self.objective)
+
+    def accumulate(self, accumulated_gradients, accumulated_loss, gradients, loss, frames):
+        weighted = tree_map(lambda value: value * frames, gradients)
+        return (tree_map(lambda left, right: left + right, accumulated_gradients, weighted),
+                accumulated_loss + loss * frames)
+
 
 class RNNoise(nn.Module):
-    def __init__(self, config: ModelConfig, batch_size: int = 8, tbptt_length: int = 250):
-        """Initialize a fixed-shape CUDA RNNoise graph model.
+    """Thin public composite model for RNNoise training and inference."""
 
-        :param config: Network dimensions shared by the training backend.
-        :param batch_size: Fixed batch size used by ``step_graph`` input and
-            hidden-state shape checks.
-        :param tbptt_length: Number of new frames processed by one TBPTT
-            step.  The graph input window contains four additional causal
-            context frames.
-        :raises AssertionError: If ``batch_size`` or ``tbptt_length`` is not
-            positive.
-        """
+    def __init__(self, model_config: ModelConfig, train_config: Opt[TrainConfig] = None):
         super().__init__()
+        self.model_config = model_config
+        self.train_config = train_config
+        self.chunk = RNNoiseChunk(model_config, train_config) if train_config is not None else None
+        self.step = RNNoiseFrameStep(model_config, None) if train_config is None else None
 
-        assert batch_size > 0
-        assert tbptt_length > 0
-        self.config = config
-        self.batch_size = batch_size
-        self.tbptt_length = tbptt_length
+    def __call__(self, *args, **kwargs):
+        step = self.step if self.chunk is None else self.chunk.step
+        return step(*args, **kwargs)
 
-        # Registers the layers and modules used in the RNNoise model
-        self.conv1 = nn.Conv1d(config.input_dim, config.cond_size, 3)
-        self.conv2 = nn.Conv1d(config.cond_size, config.gru_size, 3)
-        self.gru1 = nn.GRU(config.gru_size, config.gru_size)
-        self.gru2 = nn.GRU(config.gru_size, config.gru_size)
-        self.gru3 = nn.GRU(config.gru_size, config.gru_size)
-        self.gain = nn.Linear(4 * config.gru_size, config.output_dim)
-        self.vad = nn.Linear(4 * config.gru_size, 1)
+    def objective(self, *args, **kwargs):
+        assert self.chunk is not None
+        return self.chunk.objective(*args, **kwargs)
 
-    def step_graph(self, feature_window, h1, h2, h3):
-        """Evaluate one fixed-shape RNNoise recurrent step.
-
-        The input window contains four frames of causal convolution history
-        followed by one ``tbptt_length``-frame chunk.  Both convolutions use
-        valid kernels, so the four history frames are consumed and the
-        outputs retain exactly ``tbptt_length`` frames.  This method constructs lazy MLX
-        expressions; the caller controls compilation and evaluation.
-
-        :param feature_window: MLX array with shape
-            ``(batch_size, tbptt_length + 4, config.input_dim)``.  It is
-            neither returned nor mutated; the caller owns its overlap-save
-            update.
-        :param h1: First GRU carry with shape
-            ``(batch_size, config.gru_size)``.
-        :param h2: Second GRU carry with shape
-            ``(batch_size, config.gru_size)``.
-        :param h3: Third GRU carry with shape
-            ``(batch_size, config.gru_size)``.
-        :returns: A flat tuple ``(gain, vad, h1_next, h2_next, h3_next)``.
-            ``gain`` has shape ``(batch_size, tbptt_length, config.output_dim)``;
-            ``vad`` has shape ``(batch_size, tbptt_length, 1)``; and each returned
-            carry has shape ``(batch_size, config.gru_size)``.
-        :raises AssertionError: If an input has an incompatible shape.
-
-        Pass each returned carry to the corresponding hidden-state argument
-        of the next chunk.
-        """
-
-        assert feature_window.shape == (
-            self.batch_size,
-            self.tbptt_length + 4,
-            self.config.input_dim,
-        )
-        assert h1.shape == (self.batch_size, self.config.gru_size)
-        assert h2.shape == (self.batch_size, self.config.gru_size)
-        assert h3.shape == (self.batch_size, self.config.gru_size)
-
-        conv1 = mx.tanh(self.conv1(feature_window))
-        conv2 = mx.tanh(self.conv2(conv1))
-        y1 = self.gru1(conv2, h1)
-        h1 = y1[..., -1, :]
-        y2 = self.gru2(y1, h2)
-        h2 = y2[..., -1, :]
-        y3 = self.gru3(y2, h3)
-        h3 = y3[..., -1, :]
-        joined = mx.concatenate((conv2, y1, y2, y3), axis=-1)
-        predicted_gain = mx.sigmoid(self.gain(joined))
-        predicted_vad = mx.sigmoid(self.vad(joined))
-        return predicted_gain, predicted_vad, h1, h2, h3
-
-    def loss_graph(self, target_gain, target_vad, predicted_gain, predicted_vad, gamma):
-        """Compute the CUDA training loss for one fixed-shape chunk.
-
-        :param target_gain: Gain targets with shape
-            ``(batch_size, tbptt_length, config.output_dim)``.
-        :param target_vad: VAD targets with shape
-            ``(batch_size, tbptt_length, 1)``.
-        :param predicted_gain: Predicted gains with the same shape as
-            ``target_gain``.
-        :param predicted_vad: Predicted VAD probabilities with the same shape
-            as ``target_vad``.
-        :param gamma: Positive exponent used by the gain loss.
-        :returns: A scalar MLX loss expression.  The expression is lazy and
-            is materialized by the caller.
-        :raises AssertionError: If prediction and target shapes do not match,
-            or if ``gamma`` is not positive.
-        """
-
-        assert target_gain.shape == (
-            self.batch_size,
-            self.tbptt_length,
-            self.config.output_dim,
-        )
-        assert target_vad.shape == (
-            self.batch_size,
-            self.tbptt_length,
-            1,
-        )
-        assert predicted_gain.shape == target_gain.shape
-        assert predicted_vad.shape == target_vad.shape
-        assert gamma > 0
-
-        target = mx.maximum(target_gain, 0)
-        target = target * mx.square(mx.tanh(8 * target))
-        active = mx.minimum(target_gain + 1, 1)
-        error = predicted_gain**gamma - target**gamma
-        gain_loss = mx.mean((1 + 5 * target_vad) * active * mx.square(error))
-        vad_loss = mx.mean(
-            mx.abs(2 * target_vad - 1)
-            * (
-                -target_vad * mx.log(0.01 + predicted_vad)
-                - (1 - target_vad) * mx.log(1.01 - predicted_vad)
-            )
-        )
-        return gain_loss + 0.001 * vad_loss
+    def value_and_grad(self):
+        assert self.chunk is not None
+        return nn.value_and_grad(self, self.objective)

@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import mlx.core as mx
+import mlx.optimizers as optim
 
-from .executor import CompiledChunkRunner
-from .workspace import FixedChunkWorkspace
+from ..training.config import ModelConfig, TrainConfig
+from .graph import RNNoise, RNNoiseChunk
+from mlx.utils import tree_map
 
 
 @dataclass
@@ -17,7 +19,6 @@ class CudaUpdateResult:
     loss: mx.array
     state: tuple
     gradients: object
-    workspace: FixedChunkWorkspace
     target_frames: int
 
 
@@ -25,82 +26,113 @@ class CUDATrainingLoop:
     """Own one fixed-shape segmented TBPTT update on CUDA.
 
     The caller supplies already-loaded host batches and receives only the
-    update result.  Chunk slicing, workspace ownership, gradient accumulation,
-    optimizer update, and evaluation boundaries remain in this backend.
+    update result.  Chunk slicing, gradient accumulation, optimizer update,
+    and evaluation boundaries remain in this backend.
     """
 
-    def __init__(self, runner: CompiledChunkRunner, model):
-        self.runner = runner
-        self.model = model
+    def __init__(self, model_config: ModelConfig, train_config: TrainConfig, optimizer):
+        """Initialize a CUDA training loop around an RNNoise module."""
+        assert train_config is not None
+        self.model_config = model_config
+        self.train_config = train_config
+        self.model = RNNoise(model_config, train_config)
+        self.optimizer = optimizer
+        self.chunk = self.model.chunk
+        assert self.chunk is not None
+        self.compiled_model_value_and_grad = mx.compile(
+            self.model.value_and_grad()
+        )
 
-    def run_update(self, features, gain, vad, *, segment_length: int, state=None):
-        if segment_length != 250:
-            raise ValueError("CUDATrainingLoop requires 250-frame chunks")
-        if features.shape[1] % segment_length != 0:
-            raise ValueError("sequence length must be divisible by 250")
+    @classmethod
+    def create(
+        cls,
+        config: ModelConfig,
+        *,
+        batch_size: int = 8,
+        tbptt_length: int = 250,
+        learning_rate: float = 1e-3,
+    ) -> "CUDATrainingLoop":
+        """Create a CUDA training path backed by the CUDA RNNoise module."""
+        train_config = TrainConfig()
+        assert batch_size == train_config.batch_size
+        assert tbptt_length == train_config.tbptt_length
+        optimizer = optim.Adam(learning_rate=learning_rate)
+        loop = cls(config, train_config, optimizer)
+        mx.eval(loop.model.parameters(), optimizer.state)
+        return loop
 
-        workspace = FixedChunkWorkspace.allocate(features)
-        accumulated_gradients = None
-        accumulated_loss = None
+    def run_update(
+        self,
+        features,
+        target_gain,
+        target_vad,
+        *,
+        segment_length: int,
+        state,
+    ):
+        """Run one optimizer update using feature and target sequences.
+
+        ``target_gain`` and ``target_vad`` are supervised labels aligned with
+        ``features``; they are not predictions produced by the model.  The
+        caller owns the initial GRU state and must provide it explicitly.
+        """
+        assert segment_length == self.train_config.tbptt_length
+        assert features.shape[1] % segment_length == 0
+
+        padding = mx.zeros(
+            (features.shape[0], 4, features.shape[2]),
+            dtype=features.dtype,
+        )
+        padded_features = mx.concatenate((padding, features), axis=1)
+        accumulated_gradients = tree_map(
+            mx.zeros_like,
+            self.model.trainable_parameters(),
+        )
+        accumulated_loss = mx.zeros((), dtype=features.dtype)
         target_frames = 0
 
         for start in range(0, features.shape[1], segment_length):
             end = start + segment_length
             chunk_features = features[:, start:end, :]
-            if state is None:
-                chunk_gain = gain[:, start:end, :]
-                chunk_vad = vad[:, start:end, :]
-                loss, h1, h2, h3, gradients = (
-                    self.runner.first_grad(
-                        chunk_features,
-                        chunk_gain,
-                        chunk_vad,
-                        workspace.features,
-                    )
-                )
-                state = (h1, h2, h3)
-            else:
-                chunk_gain = gain[:, start:end, :]
-                chunk_vad = vad[:, start:end, :]
-                loss, h1, h2, h3, gradients = (
-                    self.runner.next_grad(
-                        chunk_features,
-                        chunk_gain,
-                        chunk_vad,
-                        state,
-                        workspace.features,
-                    )
-                )
-                state = (h1, h2, h3)
+            chunk_target_gain = target_gain[:, start:end, :]
+            chunk_target_vad = target_vad[:, start:end, :]
+            feature_window = padded_features[:, start : end + 4, :]
+            (loss, model_out), gradients = self.compiled_model_value_and_grad(
+                feature_window,
+                chunk_target_gain,
+                chunk_target_vad,
+                state[0],
+                state[1],
+                state[2],
+            )
+            _, _, gru1_state, gru2_state, gru3_state, _, _ = model_out
+            accumulated_gradients, accumulated_loss = self.chunk.accumulate(
+                accumulated_gradients,
+                accumulated_loss,
+                gradients,
+                loss,
+                chunk_target_gain.shape[1],
+            )
+            state = (gru1_state, gru2_state, gru3_state)
 
-            chunk_frames = chunk_gain.shape[1]
-            mx.eval(state, gradients)
-            weighted = self.runner.scale_gradients(gradients, chunk_frames)
-            accumulated_gradients = (
-                weighted
-                if accumulated_gradients is None
-                else self.runner.accumulate_gradients(
-                    accumulated_gradients, weighted
-                )
-            )
-            accumulated_loss = (
-                loss * chunk_frames
-                if accumulated_loss is None
-                else accumulated_loss + loss * chunk_frames
-            )
+            chunk_frames = chunk_target_gain.shape[1]
             target_frames += chunk_frames
             state = tuple(mx.stop_gradient(value) for value in state)
+            # First milestone: materialize the compiled chunk outputs at the
+            # end of each loop body.  This boundary can later be moved to the
+            # update level once the fixed graph is validated.
+            mx.eval(loss, state, accumulated_gradients, accumulated_loss, feature_window)
 
-        gradients = self.runner.average_gradients(
-            accumulated_gradients, target_frames
+        gradients = tree_map(
+            lambda value: value / target_frames,
+            accumulated_gradients,
         )
-        self.runner.apply_optimizer(gradients)
+        self.optimizer.update(self.model, gradients)
         loss = accumulated_loss / target_frames
-        mx.eval(self.model.state, self.runner.optimizer.state, loss)
+        mx.eval(self.model.state, self.optimizer.state, loss)
         return CudaUpdateResult(
             loss=loss,
             state=state,
             gradients=gradients,
-            workspace=workspace,
             target_frames=target_frames,
         )
