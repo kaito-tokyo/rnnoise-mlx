@@ -98,7 +98,7 @@ class RNNoiseChunk(nn.Module):
         self.model_config = model_config
         self.train_config = train_config
 
-        self.step = RNNoiseFrameStep(model_config, train_config)
+        self.frame_step = RNNoiseFrameStep(model_config, train_config)
         self.value_and_grad = nn.value_and_grad(self, self._objective)
 
     def __call__(self, feature, targets, state, accumulated_gradients):
@@ -113,7 +113,7 @@ class RNNoiseChunk(nn.Module):
 
     def _objective(self, feature, targets, state):
         target_dense_out, target_vad = targets
-        model_out = self.step(feature, state)
+        model_out = self.frame_step(feature, state)
         predicted_dense_out, predicted_vad = model_out[:2]
         target = mx.maximum(target_dense_out, 0)
         target = target * mx.square(mx.tanh(8 * target))
@@ -147,7 +147,7 @@ class RNNoise(nn.Module):
         )
 
     def __call__(self, *args, **kwargs):
-        step = self.step if self.chunk is None else self.chunk.step
+        step = self.step if self.chunk is None else self.chunk.frame_step
         return step(*args, **kwargs)
 
     def objective(self, *args, **kwargs):
