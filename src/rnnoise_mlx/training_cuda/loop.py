@@ -39,6 +39,7 @@ class CUDATrainingLoop:
         self.optimizer = optimizer
         self.chunk = self.model.chunk
         assert self.chunk is not None
+        self.compiled_chunk = mx.compile(self.chunk)
 
     @classmethod
     def create(
@@ -95,17 +96,14 @@ class CUDATrainingLoop:
             chunk_target_gain = target_gain[:, start:end, :]
             chunk_target_vad = target_vad[:, start:end, :]
             feature = padded_features[:, start : end + 4, :]
-            accumulated_loss, accumulated_gradients, state = self.chunk(
+            loss, state, accumulated_gradients = self.compiled_chunk(
                 feature,
                 (chunk_target_gain, chunk_target_vad),
                 state,
-                (
-                    accumulated_gradients,
-                    accumulated_loss,
-                    chunk_target_gain.shape[1],
-                ),
+                accumulated_gradients,
             )
             chunk_frames = chunk_target_gain.shape[1]
+            accumulated_loss = accumulated_loss + loss * chunk_frames
             target_frames += chunk_frames
             state = tuple(mx.stop_gradient(value) for value in state)
             # First milestone: materialize the compiled chunk outputs at the

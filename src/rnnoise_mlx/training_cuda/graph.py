@@ -16,9 +16,12 @@ class RNNoiseFrameStep(nn.Module):
 
     def __init__(self, model_config: ModelConfig, train_config: Opt[TrainConfig]):
         super().__init__()
+
         assert model_config is not None
+
         self.model_config = model_config
         self.train_config = train_config
+
         if train_config is None:
             self.feature_shape = (1, 1, model_config.input_dim)
             self.gru_shape = (1, model_config.gru_size)
@@ -31,6 +34,8 @@ class RNNoiseFrameStep(nn.Module):
                 model_config.input_dim,
             )
             self.gru_shape = (train_config.batch_size, model_config.gru_size)
+
+        # Operators
         self.conv1 = nn.Conv1d(model_config.input_dim, model_config.cond_size, 3)
         self.conv2 = nn.Conv1d(model_config.cond_size, model_config.gru_size, 3)
         self.gru1 = nn.GRU(model_config.gru_size, model_config.gru_size)
@@ -42,47 +47,43 @@ class RNNoiseFrameStep(nn.Module):
     def __call__(
         self,
         feature,
-        gru1_state,
-        gru2_state,
-        gru3_state,
-        conv1_state=None,
-        conv2_state=None,
+        gru_states,
+        conv_states=None,
     ):
         assert feature.shape == self.feature_shape
-        assert gru1_state.shape == self.gru_shape
-        assert gru2_state.shape == self.gru_shape
-        assert gru3_state.shape == self.gru_shape
+        assert gru_states is not None
+        assert gru_states[0].shape == self.gru_shape
+        assert gru_states[1].shape == self.gru_shape
+        assert gru_states[2].shape == self.gru_shape
+
         if self.train_config is None:
-            assert conv1_state is not None and conv2_state is not None
-            assert conv1_state.shape == self.conv1_state_shape
-            assert conv2_state.shape == self.conv2_state_shape
-            conv1_input = mx.concatenate((conv1_state, feature), axis=1)
-            conv1 = mx.tanh(self.conv1(conv1_input))
-            next_conv1_state = conv1_input[:, -2:, :]
-            conv2_input = mx.concatenate((conv2_state, conv1), axis=1)
-            conv2 = mx.tanh(self.conv2(conv2_input))
-            next_conv2_state = conv2_input[:, -2:, :]
+            assert conv_states is not None
+            assert conv_states[0].shape == self.conv1_state_shape
+            assert conv_states[1].shape == self.conv2_state_shape
         else:
-            assert conv1_state is None and conv2_state is None
+            assert conv_states is None
+
+        if self.train_config is None:
+            conv1_input = mx.concatenate((conv_states[0], feature), axis=1)
+            conv1 = mx.tanh(self.conv1(conv1_input))
+            conv2_input = mx.concatenate((conv_states[1], conv1), axis=1)
+            conv2 = mx.tanh(self.conv2(conv2_input))
+            next_conv_states = (conv1_input[:, -2:, :], conv2_input[:, -2:, :])
+        else:
             conv1 = mx.tanh(self.conv1(feature))
             conv2 = mx.tanh(self.conv2(conv1))
-            next_conv1_state = next_conv2_state = None
-        y1 = self.gru1(conv2, gru1_state)
-        next_gru1_state = y1[..., -1, :]
-        y2 = self.gru2(y1, gru2_state)
-        next_gru2_state = y2[..., -1, :]
-        y3 = self.gru3(y2, gru3_state)
-        next_gru3_state = y3[..., -1, :]
+            next_conv_states = None
+
+        y1 = self.gru1(conv2, gru_states[0])
+        y2 = self.gru2(y1, gru_states[1])
+        y3 = self.gru3(y2, gru_states[2])
+        next_gru_states = (y1[..., -1, :], y2[..., -1, :], y3[..., -1, :])
+
         joined = mx.concatenate((conv2, y1, y2, y3), axis=-1)
-        return (
-            mx.sigmoid(self.dense_out(joined)),
-            mx.sigmoid(self.vad(joined)),
-            next_gru1_state,
-            next_gru2_state,
-            next_gru3_state,
-            next_conv1_state,
-            next_conv2_state,
-        )
+        dense_out = mx.sigmoid(self.dense_out(joined))
+        vad = mx.sigmoid(self.vad(joined))
+
+        return (dense_out, vad, next_gru_states, next_conv_states)
 
 
 class RNNoiseChunk(nn.Module):
@@ -90,75 +91,40 @@ class RNNoiseChunk(nn.Module):
 
     def __init__(self, model_config: ModelConfig, train_config: TrainConfig):
         super().__init__()
-        assert model_config is not None and train_config is not None
+
+        assert model_config is not None
+        assert train_config is not None
+
         self.model_config = model_config
         self.train_config = train_config
-        self.gamma = train_config.gamma
-        self.step = RNNoiseFrameStep(model_config, train_config)
-        self.value_and_grad = nn.value_and_grad(self, self.objective)
 
-    def __call__(
-        self,
-        feature,
-        targets,
-        state,
-        accumulated,
-    ):
-        accumulated_gradients, accumulated_loss, frames = accumulated
-        (loss, next_state), gradients = self.value_and_grad(
-            feature,
-            targets,
-            state,
-        )
+        self.step = RNNoiseFrameStep(model_config, train_config)
+        self.value_and_grad = nn.value_and_grad(self, self._objective)
+
+    def __call__(self, feature, targets, state, accumulated_gradients):
+        (loss, next_state), gradients = self.value_and_grad(feature, targets, state)
         weighted_gradients = tree_map(
-            lambda value: value * frames,
-            gradients,
+            lambda x: x * self.train_config.tbptt_length, gradients
         )
         accumulated_gradients = tree_map(
-            lambda accumulated, weighted: accumulated + weighted,
-            accumulated_gradients,
-            weighted_gradients,
+            lambda x, y: x + y, accumulated_gradients, weighted_gradients
         )
-        accumulated_loss = accumulated_loss + loss * frames
-        return (
-            accumulated_loss,
-            accumulated_gradients,
-            next_state,
-        )
+        return (loss, next_state, accumulated_gradients)
 
-    def objective(self, feature, targets, state):
+    def _objective(self, feature, targets, state):
         target_dense_out, target_vad = targets
-        gru1_state, gru2_state, gru3_state = state
-        model_out = self.step(
-            feature,
-            gru1_state,
-            gru2_state,
-            gru3_state,
-        )
-        loss = self.calculate_loss(
-            predicted_dense_out=model_out[0],
-            predicted_vad=model_out[1],
-            target_dense_out=target_dense_out,
-            target_vad=target_vad,
-        )
-        return loss, tuple(model_out[2:5])
-
-    def calculate_loss(
-        self, predicted_dense_out, predicted_vad, target_dense_out, target_vad
-    ):
+        model_out = self.step(feature, state)
+        predicted_dense_out, predicted_vad = model_out[:2]
         target = mx.maximum(target_dense_out, 0)
         target = target * mx.square(mx.tanh(8 * target))
         active = mx.minimum(target_dense_out + 1, 1)
         error = predicted_dense_out**self.gamma - target**self.gamma
         gain_loss = mx.mean((1 + 5 * target_vad) * active * mx.square(error))
-        vad_loss = mx.mean(
-            mx.abs(2 * target_vad - 1)
-            * (
-                -target_vad * mx.log(0.01 + predicted_vad)
-                - (1 - target_vad) * mx.log(1.01 - predicted_vad)
-            )
-        )
-        return gain_loss + 0.001 * vad_loss
+        vad_weight = mx.abs(2 * target_vad - 1)
+        vad_positive_loss = -target_vad * mx.log(0.01 + predicted_vad)
+        vad_negative_loss = -(1 - target_vad) * mx.log(1.01 - predicted_vad)
+        vad_loss = mx.mean(vad_weight * (vad_positive_loss + vad_negative_loss))
+        return gain_loss + 0.001 * vad_loss, model_out[2]
 
 
 class RNNoise(nn.Module):
@@ -185,7 +151,7 @@ class RNNoise(nn.Module):
 
     def objective(self, *args, **kwargs):
         assert self.chunk is not None
-        return self.chunk.objective(*args, **kwargs)
+        return self.chunk._objective(*args, **kwargs)
 
     def value_and_grad(self):
         assert self.chunk is not None
