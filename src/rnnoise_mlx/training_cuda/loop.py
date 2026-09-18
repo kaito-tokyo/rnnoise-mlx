@@ -58,6 +58,8 @@ class CUDATrainingLoop:
         optimizer = optim.Adam(learning_rate=learning_rate)
         loop = cls(config, train_config, optimizer)
         mx.eval(loop.chunk.parameters())
+        optimizer.init(loop.chunk.trainable_parameters())
+        mx.eval(optimizer.state)
         return loop
 
     def run_update(
