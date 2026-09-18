@@ -53,9 +53,10 @@ class CUDATrainingLoop:
         learning_rate: float = 1e-3,
     ) -> "CUDATrainingLoop":
         """Create a CUDA training path backed by the CUDA RNNoise module."""
-        train_config = TrainConfig()
-        assert batch_size == train_config.batch_size
-        assert tbptt_length == train_config.tbptt_length
+        train_config = TrainConfig(
+            batch_size=batch_size,
+            tbptt_length=tbptt_length,
+        )
         optimizer = optim.Adam(learning_rate=learning_rate)
         loop = cls(config, train_config, optimizer)
         mx.eval(loop.model.parameters(), optimizer.state)

@@ -18,6 +18,6 @@ class ModelConfig:
 class TrainConfig:
     """Describe the RNNoise training configuration shared by all backends."""
 
-    batch_size: int = field(default=8, init=False)
-    tbptt_length: int = field(default=250, init=False)
-    gamma: float = field(default=0.25, init=False)
+    batch_size: int = 8
+    tbptt_length: int = 250
+    gamma: float = 0.25
