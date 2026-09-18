@@ -57,7 +57,7 @@ class CUDATrainingLoop:
         )
         optimizer = optim.Adam(learning_rate=learning_rate)
         loop = cls(config, train_config, optimizer)
-        mx.eval(loop.model.parameters(), optimizer.state)
+        mx.eval(loop.chunk.parameters(), optimizer.state)
         return loop
 
     def run_update(
@@ -85,7 +85,7 @@ class CUDATrainingLoop:
         padded_features = mx.concatenate((padding, features), axis=1)
         accumulated_gradients = tree_map(
             mx.zeros_like,
-            self.model.trainable_parameters(),
+            self.chunk.trainable_parameters(),
         )
         accumulated_loss = mx.zeros((), dtype=features.dtype)
         target_frames = 0
@@ -115,9 +115,9 @@ class CUDATrainingLoop:
             lambda value: value / target_frames,
             accumulated_gradients,
         )
-        self.optimizer.update(self.model, gradients)
+        self.optimizer.update(self.chunk, gradients)
         loss = accumulated_loss / target_frames
-        mx.eval(self.model.state, self.optimizer.state, loss)
+        mx.eval(self.chunk.state, self.optimizer.state, loss)
         return CudaUpdateResult(
             loss=loss,
             state=state,
