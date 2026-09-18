@@ -13,35 +13,35 @@ class CompiledObjective:
     def __init__(self, model, gamma: float):
         self.model = model
 
-    def __call__(self, params, features, gain, vad, state, feature_window, first):
+    def __call__(self, params, features, gain, vad, state, feature, first):
         self.model.update(params)
         if first:
-            feature_window = mx.slice_update(
-                feature_window, features, mx.array(4), axes=(1,)
+            feature = mx.slice_update(
+                feature, features, mx.array(4), axes=(1,)
             )
             zeros = mx.zeros(
                 (features.shape[0], self.model.model_config.gru_size),
                 dtype=features.dtype,
             )
             predicted_gain, predicted_vad, gru1_state, gru2_state, gru3_state = self.model(
-                feature_window, zeros, zeros, zeros
+                feature, zeros, zeros, zeros
             )
         else:
             gru1_state, gru2_state, gru3_state = state
-            feature_window = mx.slice_update(
-                feature_window, feature_window[:, -4:, :], mx.array(0), axes=(1,)
+            feature = mx.slice_update(
+                feature, feature[:, -4:, :], mx.array(0), axes=(1,)
             )
-            feature_window = mx.slice_update(
-                feature_window, features, mx.array(4), axes=(1,)
+            feature = mx.slice_update(
+                feature, features, mx.array(4), axes=(1,)
             )
             predicted_gain, predicted_vad, gru1_state, gru2_state, gru3_state = self.model(
-                feature_window, gru1_state, gru2_state, gru3_state
+                feature, gru1_state, gru2_state, gru3_state
             )
         loss, *_ = self.model._objective(
             features, gain, vad, gru1_state, gru2_state, gru3_state,
-            feature_window,
+            feature,
         )
-        return loss, gru1_state, gru2_state, gru3_state, feature_window
+        return loss, gru1_state, gru2_state, gru3_state, feature
 
 
 class CompiledFirstGrad:
@@ -49,13 +49,13 @@ class CompiledFirstGrad:
         self.value_and_grad = value_and_grad
         self.model = model
 
-    def __call__(self, features, gain, vad, feature_window):
+    def __call__(self, features, gain, vad, feature):
         result, gradients = self.value_and_grad(
             self.model.trainable_parameters(), features, gain, vad, (),
-            feature_window, True
+            feature, True
         )
-        loss, gru1_state, gru2_state, gru3_state, feature_window = result
-        return loss, (gru1_state, gru2_state, gru3_state), gradients, feature_window
+        loss, gru1_state, gru2_state, gru3_state, feature = result
+        return loss, (gru1_state, gru2_state, gru3_state), gradients, feature
 
 
 class CompiledNextGrad:
@@ -63,13 +63,13 @@ class CompiledNextGrad:
         self.value_and_grad = value_and_grad
         self.model = model
 
-    def __call__(self, features, gain, vad, state, feature_window):
+    def __call__(self, features, gain, vad, state, feature):
         result, gradients = self.value_and_grad(
             self.model.trainable_parameters(), features, gain, vad, state,
-            feature_window, False
+            feature, False
         )
-        loss, gru1_state, gru2_state, gru3_state, feature_window = result
-        return loss, (gru1_state, gru2_state, gru3_state), gradients, feature_window
+        loss, gru1_state, gru2_state, gru3_state, feature = result
+        return loss, (gru1_state, gru2_state, gru3_state), gradients, feature
 
 
 class CompiledOptimizerUpdate:

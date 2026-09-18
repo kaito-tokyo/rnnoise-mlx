@@ -15,7 +15,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+    "ruff>=0.12",
+]
 conversion = ["coremltools", "torch"]
 
 [tool.setuptools.packages.find]
@@ -25,3 +28,10 @@ namespaces = false
 
 [tool.pytest.ini_options]
 testpaths = ["src/rnnoise_mlx/tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.format]
+docstring-code-format = true

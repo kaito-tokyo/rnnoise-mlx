@@ -39,9 +39,6 @@ class CUDATrainingLoop:
         self.optimizer = optimizer
         self.chunk = self.model.chunk
         assert self.chunk is not None
-        self.compiled_model_value_and_grad = mx.compile(
-            self.model.value_and_grad()
-        )
 
     @classmethod
     def create(
@@ -97,32 +94,24 @@ class CUDATrainingLoop:
             chunk_features = features[:, start:end, :]
             chunk_target_gain = target_gain[:, start:end, :]
             chunk_target_vad = target_vad[:, start:end, :]
-            feature_window = padded_features[:, start : end + 4, :]
-            (loss, model_out), gradients = self.compiled_model_value_and_grad(
-                feature_window,
-                chunk_target_gain,
-                chunk_target_vad,
-                state[0],
-                state[1],
-                state[2],
+            feature = padded_features[:, start : end + 4, :]
+            accumulated_loss, accumulated_gradients, state = self.chunk(
+                feature,
+                (chunk_target_gain, chunk_target_vad),
+                state,
+                (
+                    accumulated_gradients,
+                    accumulated_loss,
+                    chunk_target_gain.shape[1],
+                ),
             )
-            _, _, gru1_state, gru2_state, gru3_state, _, _ = model_out
-            accumulated_gradients, accumulated_loss = self.chunk.accumulate(
-                accumulated_gradients,
-                accumulated_loss,
-                gradients,
-                loss,
-                chunk_target_gain.shape[1],
-            )
-            state = (gru1_state, gru2_state, gru3_state)
-
             chunk_frames = chunk_target_gain.shape[1]
             target_frames += chunk_frames
             state = tuple(mx.stop_gradient(value) for value in state)
             # First milestone: materialize the compiled chunk outputs at the
             # end of each loop body.  This boundary can later be moved to the
             # update level once the fixed graph is validated.
-            mx.eval(loss, state, accumulated_gradients, accumulated_loss, feature_window)
+            mx.eval(state, accumulated_gradients, accumulated_loss, feature)
 
         gradients = tree_map(
             lambda value: value / target_frames,
