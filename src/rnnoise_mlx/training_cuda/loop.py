@@ -70,6 +70,7 @@ class CUDATrainingLoop:
         *,
         segment_length: int,
         state,
+        evaluate_each_chunk: bool = True,
     ):
         """Run one optimizer update using feature and target sequences.
 
@@ -111,7 +112,8 @@ class CUDATrainingLoop:
             # First milestone: materialize the compiled chunk outputs at the
             # end of each loop body.  This boundary can later be moved to the
             # update level once the fixed graph is validated.
-            mx.eval(state, accumulated_gradients, accumulated_loss, feature)
+            if evaluate_each_chunk:
+                mx.eval(state, accumulated_gradients, accumulated_loss, feature)
 
         gradients = tree_map(
             lambda value: value / target_frames,

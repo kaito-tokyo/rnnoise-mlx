@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument(
         "--graph-mode", choices=("dynamic", "compiled_chunk"), default="dynamic"
     )
+    parser.add_argument("--defer-chunk-eval", action="store_true")
     parser.add_argument("--feature-identity", required=True)
     parser.add_argument("--evaluation-feature-identity")
     parser.add_argument("--timing-path", type=Path)
@@ -59,6 +60,7 @@ def main() -> None:
             target_vad,
             segment_length=args.segmented_tbptt_length,
             state=state,
+            evaluate_each_chunk=not args.defer_chunk_eval,
         )
         mx.eval(result.loss, result.state, loop.chunk.parameters(), loop.optimizer.state)
         elapsed = time.perf_counter() - started
