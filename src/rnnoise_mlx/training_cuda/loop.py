@@ -6,10 +6,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import mlx.core as mx
-import mlx.optimizers as optim
 from mlx.utils import tree_map
 
-from ..training.config import ModelConfig, TrainConfig
+from ..training.config import TrainConfig
 from .graph import RNNoiseChunk
 
 
@@ -42,25 +41,6 @@ class CUDATrainingLoop:
         self.compiled_chunk: Callable[..., object] = self._build_chunk_function(
             compile_chunks
         )
-
-    @classmethod
-    def create(
-        cls,
-        config: ModelConfig,
-        *,
-        batch_size: int = 8,
-        tbptt_length: int = 250,
-        learning_rate: float = 1e-3,
-        compile_chunks: bool = True,
-    ):
-        """Create a CUDA training path with one compiled chunk function."""
-        train_config = TrainConfig(
-            batch_size=batch_size,
-            tbptt_length=tbptt_length,
-        )
-        optimizer = optim.Adam(learning_rate=learning_rate)
-        chunk = RNNoiseChunk(config, train_config)
-        return cls(chunk, optimizer, compile_chunks=compile_chunks)
 
     def _build_chunk_function(self, compile_chunks: bool) -> Callable[..., object]:
         """Build the fixed-shape chunk function after state initialization."""

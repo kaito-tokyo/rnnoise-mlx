@@ -8,11 +8,12 @@ import time
 from pathlib import Path
 
 import mlx.core as mx
+import mlx.optimizers as optim
 import numpy as np
 
-from rnnoise_mlx.training.config import ModelConfig
+from rnnoise_mlx.training.config import ModelConfig, TrainConfig
 from rnnoise_mlx.training.data import FeatureDataset
-from rnnoise_mlx.training_cuda import CUDATrainingLoop
+from rnnoise_mlx.training_cuda import CUDATrainingLoop, RNNoiseChunk
 
 
 def main() -> None:
@@ -35,10 +36,15 @@ def main() -> None:
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     dataset = FeatureDataset(str(features), sequence_length=2000)
-    loop = CUDATrainingLoop.create(
-        ModelConfig(),
+    train_config = TrainConfig(
         batch_size=args.batch_size,
         tbptt_length=args.segmented_tbptt_length,
+    )
+    chunk = RNNoiseChunk(ModelConfig(), train_config)
+    optimizer = optim.Adam(learning_rate=1e-3)
+    loop = CUDATrainingLoop(
+        chunk,
+        optimizer,
         compile_chunks=not args.no_compile,
     )
     rng = np.random.default_rng(141)
