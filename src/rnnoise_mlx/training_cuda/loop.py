@@ -26,13 +26,14 @@ class CudaUpdateResult:
 class CUDATrainingLoop:
     """Own one fixed-shape, compiled segmented TBPTT update on CUDA."""
 
-    def __init__(self, model_config, train_config, optimizer, *, compile_chunks=True):
+    def __init__(self, chunk: RNNoiseChunk, optimizer, *, compile_chunks=True):
         """Initialize a CUDA training loop around an RNNoise chunk."""
-        assert train_config is not None
-        self.model_config = model_config
-        self.train_config = train_config
+        assert chunk is not None
+        self.model_config = chunk.model_config
+        self.train_config = chunk.train_config
+        assert self.train_config is not None
         self.optimizer = optimizer
-        self.chunk = RNNoiseChunk(model_config, train_config)
+        self.chunk = chunk
 
         mx.eval(self.chunk.parameters())
         self.optimizer.init(self.chunk.trainable_parameters())
@@ -58,7 +59,8 @@ class CUDATrainingLoop:
             tbptt_length=tbptt_length,
         )
         optimizer = optim.Adam(learning_rate=learning_rate)
-        return cls(config, train_config, optimizer, compile_chunks=compile_chunks)
+        chunk = RNNoiseChunk(config, train_config)
+        return cls(chunk, optimizer, compile_chunks=compile_chunks)
 
     def _build_chunk_function(self, compile_chunks: bool) -> Callable[..., object]:
         """Build the fixed-shape chunk function after state initialization."""
