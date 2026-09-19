@@ -26,14 +26,21 @@ class CudaUpdateResult:
 class CUDATrainingLoop:
     """Own one fixed-shape, compiled segmented TBPTT update on CUDA."""
 
-    def __init__(self, model_config, train_config, optimizer):
+    def __init__(self, model_config, train_config, optimizer, *, compile_chunks=True):
         """Initialize a CUDA training loop around an RNNoise chunk."""
         assert train_config is not None
         self.model_config = model_config
         self.train_config = train_config
         self.optimizer = optimizer
         self.chunk = RNNoiseChunk(model_config, train_config)
-        self.compiled_chunk: Callable[..., object] | None = None
+
+        mx.eval(self.chunk.parameters())
+        self.optimizer.init(self.chunk.trainable_parameters())
+        mx.eval(self.chunk.state, self.optimizer.state)
+
+        self.compiled_chunk: Callable[..., object] = self._build_chunk_function(
+            compile_chunks
+        )
 
     @classmethod
     def create(
@@ -51,29 +58,23 @@ class CUDATrainingLoop:
             tbptt_length=tbptt_length,
         )
         optimizer = optim.Adam(learning_rate=learning_rate)
-        loop = cls(config, train_config, optimizer)
-        mx.eval(loop.chunk.parameters())
-        optimizer.init(loop.chunk.trainable_parameters())
-        mx.eval(loop.chunk.state, optimizer.state)
+        return cls(config, train_config, optimizer, compile_chunks=compile_chunks)
 
-        def chunk_value_and_grad(feature, target_gain, target_vad, state):
-            return loop.chunk.value_and_grad(
-                feature,
-                target_gain,
-                target_vad,
-                state,
-            )
+    def _build_chunk_function(self, compile_chunks: bool) -> Callable[..., object]:
+        """Build the fixed-shape chunk function after state initialization."""
 
-        loop.compiled_chunk = (
+        return (
             mx.compile(
-                chunk_value_and_grad,
-                inputs=[loop.chunk.state],
-                outputs=[loop.chunk.state],
+                self._chunk_value_and_grad,
+                inputs=[self.chunk.state],
+                outputs=[self.chunk.state],
             )
             if compile_chunks
-            else loop.chunk.value_and_grad
+            else self.chunk.value_and_grad
         )
-        return loop
+
+    def _chunk_value_and_grad(self, feature, target_gain, target_vad, state):
+        return self.chunk.value_and_grad(feature, target_gain, target_vad, state)
 
     def run_update(
         self,
