@@ -9,7 +9,7 @@ import mlx.optimizers as optim
 from mlx.utils import tree_map
 
 from ..training.config import ModelConfig, TrainConfig
-from .graph import RNNoise
+from .graph import RNNoiseChunk
 
 
 @dataclass
@@ -26,14 +26,12 @@ class CUDATrainingLoop:
     """Own one fixed-shape, compiled segmented TBPTT update on CUDA."""
 
     def __init__(self, model_config, train_config, optimizer):
-        """Initialize a CUDA training loop around an RNNoise module."""
+        """Initialize a CUDA training loop around an RNNoise chunk."""
         assert train_config is not None
         self.model_config = model_config
         self.train_config = train_config
-        self.model = RNNoise(model_config, train_config)
         self.optimizer = optimizer
-        self.chunk = self.model.chunk
-        assert self.chunk is not None
+        self.chunk = RNNoiseChunk(model_config, train_config)
         self.compiled_chunk = None
 
     @classmethod
