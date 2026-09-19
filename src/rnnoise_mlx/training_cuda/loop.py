@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import mlx.core as mx
@@ -32,7 +33,7 @@ class CUDATrainingLoop:
         self.train_config = train_config
         self.optimizer = optimizer
         self.chunk = RNNoiseChunk(model_config, train_config)
-        self.compiled_chunk = None
+        self.compiled_chunk: Callable[..., object] | None = None
 
     @classmethod
     def create(
