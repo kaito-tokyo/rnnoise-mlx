@@ -38,32 +38,16 @@ class CUDATrainingLoop:
         self.optimizer.init(self.chunk.trainable_parameters())
         mx.eval(self.chunk.state, self.optimizer.state)
 
-        self.compiled_chunk: Callable[..., object] = mx.compile(
-            self._chunk_value_and_grad,
-            inputs=[self.chunk.state],
-            outputs=[self.chunk.state],
+        # Capture the complete mutable training state.  The compiled unit is
+        # one update, not one chunk: this keeps forward, backward, gradient
+        # accumulation, and optimizer.update in the same MLX transformation.
+        self.compiled_update: Callable[..., object] = mx.compile(
+            self._update,
+            inputs=[self.chunk.state, self.optimizer.state],
+            outputs=[self.chunk.state, self.optimizer.state],
         )
 
-    def _chunk_value_and_grad(self, feature, target_gain, target_vad, state):
-        return self.chunk.value_and_grad(feature, target_gain, target_vad, state)
-
-    def run_update(
-        self,
-        features,
-        target_gain,
-        target_vad,
-        *,
-        segment_length: int,
-        state,
-    ):
-        """Run one optimizer update from fixed-shape compiled chunks."""
-        assert self.compiled_chunk is not None
-        assert segment_length == self.train_config.tbptt_length
-        assert features.shape[0] == self.train_config.batch_size
-        assert target_gain.shape[1] == features.shape[1]
-        assert target_vad.shape[1] == features.shape[1]
-        assert features.shape[1] % segment_length == 0
-
+    def _update(self, features, target_gain, target_vad, state):
         padding = mx.zeros(
             (features.shape[0], 4, features.shape[2]),
             dtype=features.dtype,
@@ -75,13 +59,14 @@ class CUDATrainingLoop:
         )
         accumulated_loss = mx.zeros((), dtype=features.dtype)
         target_frames = features.shape[1]
+        segment_length = self.train_config.tbptt_length
 
         for start in range(0, target_frames, segment_length):
             end = start + segment_length
             feature = padded_features[:, start : end + 4, :]
             chunk_target_gain = target_gain[:, start:end, :]
             chunk_target_vad = target_vad[:, start:end, :]
-            (loss, state), gradients = self.compiled_chunk(
+            (loss, state), gradients = self.chunk.value_and_grad(
                 feature,
                 chunk_target_gain,
                 chunk_target_vad,
@@ -100,11 +85,36 @@ class CUDATrainingLoop:
             accumulated_gradients,
         )
         self.optimizer.update(self.chunk, gradients)
-        loss = accumulated_loss / target_frames
-        mx.eval(loss)
+        return accumulated_loss / target_frames, state
+
+    def run_update(
+        self,
+        features,
+        target_gain,
+        target_vad,
+        *,
+        segment_length: int,
+        state,
+    ):
+        """Run one optimizer update from fixed-shape compiled chunks."""
+        assert self.compiled_update is not None
+        assert segment_length == self.train_config.tbptt_length
+        assert features.shape[0] == self.train_config.batch_size
+        assert target_gain.shape[1] == features.shape[1]
+        assert target_vad.shape[1] == features.shape[1]
+        assert features.shape[1] % segment_length == 0
+
+        target_frames = features.shape[1]
+        loss, state = self.compiled_update(
+            features,
+            target_gain,
+            target_vad,
+            state,
+        )
+        mx.eval(self.chunk.state, self.optimizer.state, state, loss)
         return CudaUpdateResult(
             loss=loss,
             state=state,
-            gradients=gradients,
+            gradients=None,
             target_frames=target_frames,
         )

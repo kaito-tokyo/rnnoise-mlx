@@ -380,7 +380,7 @@ def train(
     compiled_runner = None
     if use_compiled_chunk:
         compiled_runner = CompiledChunkRunner(
-            model, optimizer, args.gamma, captured_state
+            model, optimizer, args.gamma, captured_state, segment_length
         )
         scale_gradients = compiled_runner.scale_gradients
         accumulate_gradients = compiled_runner.accumulate_gradients
@@ -551,7 +551,17 @@ def train(
         batch_index = first_batch
         for features, gain, vad in batches_for_epoch(epoch, first_batch):
             batch_started = time.perf_counter()
-            if segment_length:
+            if use_compiled_chunk:
+                # The compiled runner owns the complete update boundary:
+                # segmented forward/backward, gradient accumulation, and
+                # optimizer state mutation all happen in one transformation.
+                loss = compiled_runner.update(features, gain, vad)
+                update += 1
+                processed_frames += args.batch_size * features.shape[1]
+                pending_losses.append((update, epoch, processed_frames, loss))
+                if len(pending_losses) >= 10:
+                    collect_pending()
+            elif segment_length:
                 fixed_workspace = None
                 if use_compiled_chunk:
                     fixed_workspace = FixedChunkWorkspace.allocate(features)
