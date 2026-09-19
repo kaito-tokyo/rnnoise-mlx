@@ -126,31 +126,12 @@ class RNNoiseChunk(nn.Module):
 
 
 class RNNoise(nn.Module):
-    """Thin public composite model for RNNoise training and inference."""
+    """Thin public inference model around :class:`RNNoiseFrameStep`."""
 
-    def __init__(
-        self, model_config: ModelConfig, train_config: Opt[TrainConfig] = None
-    ):
+    def __init__(self, model_config: ModelConfig):
         super().__init__()
         self.model_config = model_config
-        self.train_config = train_config
-        self.chunk = (
-            RNNoiseChunk(model_config, train_config)
-            if train_config is not None
-            else None
-        )
-        self.step = (
-            RNNoiseFrameStep(model_config, None) if train_config is None else None
-        )
+        self.step = RNNoiseFrameStep(model_config, None)
 
     def __call__(self, *args, **kwargs):
-        step = self.step if self.chunk is None else self.chunk.frame_step
-        return step(*args, **kwargs)
-
-    def objective(self, *args, **kwargs):
-        assert self.chunk is not None
-        return self.chunk._objective(*args, **kwargs)
-
-    def value_and_grad(self):
-        assert self.chunk is not None
-        return self.chunk.value_and_grad
+        return self.step(*args, **kwargs)
