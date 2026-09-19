@@ -23,7 +23,6 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--max-updates", type=int, default=20)
     parser.add_argument("--segmented-tbptt-length", type=int, default=250)
-    parser.add_argument("--no-compile", action="store_true")
     parser.add_argument("--feature-identity", required=True)
     parser.add_argument("--evaluation-feature-identity")
     parser.add_argument("--timing-path", type=Path)
@@ -45,7 +44,6 @@ def main() -> None:
     loop = CUDATrainingLoop(
         chunk,
         optimizer,
-        compile_chunks=not args.no_compile,
     )
     rng = np.random.default_rng(141)
     state = tuple(
