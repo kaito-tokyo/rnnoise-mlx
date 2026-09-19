@@ -115,7 +115,7 @@ class CUDATrainingLoop:
         )
         self.optimizer.update(self.chunk, gradients)
         loss = accumulated_loss / target_frames
-        mx.eval(loss, state, gradients)
+        mx.eval(loss)
         return CudaUpdateResult(
             loss=loss,
             state=state,
