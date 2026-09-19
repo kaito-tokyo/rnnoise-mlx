@@ -98,20 +98,18 @@ class RNNoiseChunk(nn.Module):
         self.train_config = train_config
 
         self.frame_step = RNNoiseFrameStep(model_config, train_config)
-        self.value_and_grad = mx.value_and_grad(self._objective)
+        self.value_and_grad = nn.value_and_grad(self, self._objective)
 
     def __call__(self, feature, target_gain, target_vad, gru_states):
         """Evaluate one chunk and return its loss, carry, and gradients."""
         return self.value_and_grad(
-            self.trainable_parameters(),
             feature,
             target_gain,
             target_vad,
             gru_states,
         )
 
-    def _objective(self, parameters, feature, target_gain, target_vad, gru_states):
-        self.update(parameters)
+    def _objective(self, feature, target_gain, target_vad, gru_states):
         model_out = self.frame_step(feature, gru_states)
         predicted_dense_out, predicted_vad = model_out[:2]
         target = mx.maximum(target_gain, 0)
