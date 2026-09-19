@@ -55,7 +55,21 @@ class CUDATrainingLoop:
         mx.eval(loop.chunk.parameters())
         optimizer.init(loop.chunk.trainable_parameters())
         mx.eval(loop.chunk.state, optimizer.state)
-        loop.compiled_chunk = mx.compile(loop.chunk.value_and_grad)
+
+        def chunk_value_and_grad(parameters, feature, target_gain, target_vad, state):
+            return loop.chunk.value_and_grad(
+                parameters,
+                feature,
+                target_gain,
+                target_vad,
+                state,
+            )
+
+        loop.compiled_chunk = mx.compile(
+            chunk_value_and_grad,
+            inputs=[loop.chunk.state],
+            outputs=[loop.chunk.state],
+        )
         return loop
 
     def run_update(
