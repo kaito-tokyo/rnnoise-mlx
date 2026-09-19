@@ -44,6 +44,7 @@ class CUDATrainingLoop:
         batch_size: int = 8,
         tbptt_length: int = 250,
         learning_rate: float = 1e-3,
+        compile_chunks: bool = True,
     ):
         """Create a CUDA training path with one compiled chunk function."""
         train_config = TrainConfig(
@@ -64,10 +65,14 @@ class CUDATrainingLoop:
                 state,
             )
 
-        loop.compiled_chunk = mx.compile(
-            chunk_value_and_grad,
-            inputs=[loop.chunk.state],
-            outputs=[loop.chunk.state],
+        loop.compiled_chunk = (
+            mx.compile(
+                chunk_value_and_grad,
+                inputs=[loop.chunk.state],
+                outputs=[loop.chunk.state],
+            )
+            if compile_chunks
+            else loop.chunk.value_and_grad
         )
         return loop
 
