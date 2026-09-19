@@ -6,7 +6,6 @@ from typing import Optional as Opt
 
 import mlx.core as mx
 import mlx.nn as nn
-from mlx.utils import tree_map
 
 from ..training.config import ModelConfig, TrainConfig
 
@@ -101,15 +100,13 @@ class RNNoiseChunk(nn.Module):
         self.frame_step = RNNoiseFrameStep(model_config, train_config)
         self.value_and_grad = nn.value_and_grad(self, self._objective)
 
-    def __call__(self, feature, targets, state, accumulated_gradients):
-        (loss, next_state), gradients = self.value_and_grad(feature, targets, state)
-        weighted_gradients = tree_map(
-            lambda x: x * self.train_config.tbptt_length, gradients
+    def __call__(self, feature, target_gain, target_vad, gru_states):
+        """Evaluate one chunk and return its loss, carry, and gradients."""
+        return self.value_and_grad(
+            feature,
+            (target_gain, target_vad),
+            gru_states,
         )
-        accumulated_gradients = tree_map(
-            lambda x, y: x + y, accumulated_gradients, weighted_gradients
-        )
-        return (loss, next_state, accumulated_gradients)
 
     def _objective(self, feature, targets, state):
         target_dense_out, target_vad = targets
