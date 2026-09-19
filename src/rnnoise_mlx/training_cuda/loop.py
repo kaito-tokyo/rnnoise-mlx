@@ -6,10 +6,10 @@ from dataclasses import dataclass
 
 import mlx.core as mx
 import mlx.optimizers as optim
+from mlx.utils import tree_map
 
 from ..training.config import ModelConfig, TrainConfig
-from .graph import RNNoise, RNNoiseChunk
-from mlx.utils import tree_map
+from .graph import RNNoise
 
 
 @dataclass
@@ -18,28 +18,32 @@ class CudaUpdateResult:
 
     loss: mx.array
     state: tuple
-    gradients: object
     target_frames: int
 
 
 class CUDATrainingLoop:
-    """Own one fixed-shape segmented TBPTT update on CUDA.
+    """Own one fixed-shape, compiled segmented TBPTT update on CUDA.
 
-    The caller supplies already-loaded host batches and receives only the
-    update result.  Chunk slicing, gradient accumulation, optimizer update,
-    and evaluation boundaries remain in this backend.
+    The compiled function contains all chunks, gradient accumulation, and
+    the optimizer update. The Python caller only invokes it and materializes
+    its roots with ``mx.eval``.
     """
 
-    def __init__(self, model_config: ModelConfig, train_config: TrainConfig, optimizer):
+    def __init__(self, model_config, train_config, optimizer, sequence_length):
         """Initialize a CUDA training loop around an RNNoise module."""
         assert train_config is not None
+        assert sequence_length > 0
+        assert sequence_length % train_config.tbptt_length == 0
         self.model_config = model_config
         self.train_config = train_config
+        self.sequence_length = sequence_length
+        self.chunk_count = sequence_length // train_config.tbptt_length
         self.model = RNNoise(model_config, train_config)
         self.optimizer = optimizer
         self.chunk = self.model.chunk
         assert self.chunk is not None
-        self.compiled_chunk = mx.compile(self.chunk)
+        self.compiled_state = None
+        self.compiled_model_update = None
 
     @classmethod
     def create(
@@ -49,38 +53,32 @@ class CUDATrainingLoop:
         batch_size: int = 8,
         tbptt_length: int = 250,
         learning_rate: float = 1e-3,
-    ) -> "CUDATrainingLoop":
-        """Create a CUDA training path backed by the CUDA RNNoise module."""
+        sequence_length: int = 2000,
+    ):
+        """Create and compile a CUDA training path."""
         train_config = TrainConfig(
             batch_size=batch_size,
             tbptt_length=tbptt_length,
         )
         optimizer = optim.Adam(learning_rate=learning_rate)
-        loop = cls(config, train_config, optimizer)
+        loop = cls(config, train_config, optimizer, sequence_length)
         mx.eval(loop.chunk.parameters())
         optimizer.init(loop.chunk.trainable_parameters())
-        mx.eval(optimizer.state)
+        mx.eval(loop.chunk.state, optimizer.state)
+        loop._build_compiled_model_update()
         return loop
 
-    def run_update(
-        self,
-        features,
-        target_gain,
-        target_vad,
-        *,
-        segment_length: int,
-        state,
-        evaluate_each_chunk: bool = True,
-    ):
-        """Run one optimizer update using feature and target sequences.
+    def _build_compiled_model_update(self):
+        """Compile one complete fixed-shape optimizer update."""
+        self.compiled_state = [self.chunk.state, self.optimizer.state]
+        self.compiled_model_update = mx.compile(
+            self._compiled_model_update,
+            inputs=self.compiled_state,
+            outputs=self.compiled_state,
+        )
 
-        ``target_gain`` and ``target_vad`` are supervised labels aligned with
-        ``features``; they are not predictions produced by the model.  The
-        caller owns the initial GRU state and must provide it explicitly.
-        """
-        assert segment_length == self.train_config.tbptt_length
-        assert features.shape[1] % segment_length == 0
-
+    def _compiled_model_update(self, features, target_gain, target_vad, state):
+        """Build the complete update graph for one fixed-shape batch."""
         padding = mx.zeros(
             (features.shape[0], 4, features.shape[2]),
             dtype=features.dtype,
@@ -91,40 +89,53 @@ class CUDATrainingLoop:
             self.chunk.trainable_parameters(),
         )
         accumulated_loss = mx.zeros((), dtype=features.dtype)
-        target_frames = 0
 
-        for start in range(0, features.shape[1], segment_length):
-            end = start + segment_length
-            chunk_features = features[:, start:end, :]
+        for chunk_index in range(self.chunk_count):
+            start = chunk_index * self.train_config.tbptt_length
+            end = start + self.train_config.tbptt_length
             chunk_target_gain = target_gain[:, start:end, :]
             chunk_target_vad = target_vad[:, start:end, :]
             feature = padded_features[:, start : end + 4, :]
-            loss, state, accumulated_gradients = self.compiled_chunk(
+            loss, state, accumulated_gradients = self.chunk(
                 feature,
                 (chunk_target_gain, chunk_target_vad),
                 state,
                 accumulated_gradients,
             )
-            chunk_frames = chunk_target_gain.shape[1]
-            accumulated_loss = accumulated_loss + loss * chunk_frames
-            target_frames += chunk_frames
+            accumulated_loss = accumulated_loss + (
+                loss * self.train_config.tbptt_length
+            )
             state = tuple(mx.stop_gradient(value) for value in state)
-            # First milestone: materialize the compiled chunk outputs at the
-            # end of each loop body.  This boundary can later be moved to the
-            # update level once the fixed graph is validated.
-            if evaluate_each_chunk:
-                mx.eval(state, accumulated_gradients, accumulated_loss, feature)
 
         gradients = tree_map(
-            lambda value: value / target_frames,
+            lambda value: value / self.sequence_length,
             accumulated_gradients,
         )
         self.optimizer.update(self.chunk, gradients)
-        loss = accumulated_loss / target_frames
-        mx.eval(self.chunk.state, self.optimizer.state, loss)
+        return accumulated_loss / self.sequence_length, state
+
+    def run_update(
+        self,
+        features,
+        target_gain,
+        target_vad,
+        *,
+        segment_length: int,
+        state,
+    ):
+        """Run one compiled optimizer update and materialize its roots."""
+        assert self.compiled_model_update is not None
+        assert segment_length == self.train_config.tbptt_length
+        assert features.shape[0] == self.train_config.batch_size
+        assert features.shape[1] == self.sequence_length
+        assert target_gain.shape[1] == self.sequence_length
+        assert target_vad.shape[1] == self.sequence_length
+        loss, state = self.compiled_model_update(
+            features, target_gain, target_vad, state
+        )
+        mx.eval(self.compiled_state, loss, state)
         return CudaUpdateResult(
             loss=loss,
             state=state,
-            gradients=gradients,
-            target_frames=target_frames,
+            target_frames=self.sequence_length,
         )
