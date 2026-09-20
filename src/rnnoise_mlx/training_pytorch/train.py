@@ -30,7 +30,7 @@ def rnnoise_loss(predicted_gain, predicted_vad, target_gain, target_vad, *, gamm
     return gain_loss + 0.001 * vad_loss
 
 
-class PyTorchTrainingLoop:
+class Trainer:
     def __init__(
         self,
         model: RNNoise,
@@ -142,7 +142,7 @@ def train(args) -> dict:
     if args.init_weights:
         load_weights(model, args.init_weights)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    loop = PyTorchTrainingLoop(model, optimizer, train_config)
+    loop = Trainer(model, optimizer, train_config)
     signature = {
         "model": asdict(config),
         "training": asdict(train_config),

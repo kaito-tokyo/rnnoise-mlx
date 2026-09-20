@@ -23,7 +23,7 @@ except ModuleNotFoundError:
 from rnnoise_mlx.tools.rnnoise_weights import read_weights
 from rnnoise_mlx.training_pytorch import (
     ModelConfig,
-    PyTorchTrainingLoop,
+    Trainer,
     RNNoise,
     TrainConfig,
 )
@@ -107,7 +107,7 @@ class PyTorchTrainingTests(unittest.TestCase):
         settings = TrainConfig(2, 3)
         reference = copy.deepcopy(model)
         optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
-        loop = PyTorchTrainingLoop(model, optimizer, settings)
+        loop = Trainer(model, optimizer, settings)
         assert loop.train_config is settings
         batch = inputs()
         initial = tuple(s.requires_grad_() for s in loop.initial_state())
@@ -145,7 +145,7 @@ class PyTorchTrainingTests(unittest.TestCase):
         for frames in (5, 0):
             model = RNNoise(TinyConfig())
             before = copy.deepcopy(model.state_dict())
-            loop = PyTorchTrainingLoop(
+            loop = Trainer(
                 model, torch.optim.Adam(model.parameters()), TrainConfig(2, 3)
             )
             with self.assertRaises(ValueError):
@@ -158,7 +158,7 @@ class PyTorchTrainingTests(unittest.TestCase):
         for settings in (TrainConfig(0, 3), TrainConfig(2, 0), TrainConfig(2, 3, 0)):
             model = RNNoise(TinyConfig())
             with self.assertRaises(ValueError):
-                PyTorchTrainingLoop(model, torch.optim.Adam(model.parameters()), settings)
+                Trainer(model, torch.optim.Adam(model.parameters()), settings)
 
 
     def test_exported_weights_preserve_sequence_outputs(self):
