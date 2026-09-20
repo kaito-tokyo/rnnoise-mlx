@@ -68,9 +68,6 @@ python -m rnnoise_mlx.training.train \
   --batch-size 8 --sequence-length 2000 \
   --segmented-tbptt-length 250 --segmented-tbptt-state carry \
   --max-updates 10000 --checkpoint-every 1000 --seed 141 \
-  --mlflow-tracking-uri "$MLFLOW_TRACKING_URI" \
-  --mlflow-experiment "$MLFLOW_EXPERIMENT" \
-  --mlflow-run-name cjk-cleaner-tbptt250-10k
 ```
 
 The 10k checkpoint is the fixed cleaner candidate. Intermediate checkpoints
@@ -157,7 +154,6 @@ python -m rnnoise_mlx.tools.generate_features \
   --speech-offsets data/final-base/offsets
 ```
 
-Stage two uses a new output directory and MLflow run. Its update count remains
 a separate model-quality decision. Upload its final mix specification, both
 cleaning manifests, and all immutable training checkpoints.
 

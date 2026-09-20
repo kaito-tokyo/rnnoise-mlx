@@ -9,14 +9,16 @@ description = "Train, convert, and validate RNNoise-family denoisers with MLX"
 requires-python = ">=3.11"
 license = "BSD-3-Clause"
 dependencies = [
-    "mlx[cuda]>=0.32.2,<0.33",
     "numpy>=2",
     "safetensors",
+    "mlx>=0.32.2,<0.33; platform_system == 'Darwin' and platform_machine == 'arm64'",
+    "mlx[cpu]>=0.32.2,<0.33; platform_system == 'Linux'",
 ]
 
 [project.optional-dependencies]
+torch = ["torch"]
+cuda = ["mlx[cuda12]>=0.32.2,<0.33; platform_system == 'Linux'"]
 dev = [
-    "pytest>=8",
     "ruff>=0.12",
 ]
 conversion = ["coremltools", "torch"]
@@ -25,9 +27,6 @@ conversion = ["coremltools", "torch"]
 where = ["src"]
 include = ["rnnoise_mlx*"]
 namespaces = false
-
-[tool.pytest.ini_options]
-testpaths = ["src/rnnoise_mlx/tests"]
 
 [tool.ruff]
 target-version = "py311"

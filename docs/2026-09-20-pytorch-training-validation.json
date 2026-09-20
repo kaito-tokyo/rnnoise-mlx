@@ -1,0 +1,132 @@
+{
+  "returncode": 0,
+  "resources": [
+    {
+      "update": 1,
+      "cpu_percent": {
+        "mean": 74.91999999999999,
+        "median": 70.9,
+        "p95": 99.8,
+        "samples": 5
+      },
+      "gpu_percent": {
+        "mean": 30.2,
+        "median": 1,
+        "p95": 88.19999999999999,
+        "samples": 5
+      },
+      "gpu_memory_mib": {
+        "mean": 429.8,
+        "median": 445,
+        "p95": 471,
+        "samples": 5
+      }
+    },
+    {
+      "update": 2,
+      "cpu_percent": {
+        "mean": 80.1,
+        "median": 80.1,
+        "p95": 80.1,
+        "samples": 1
+      },
+      "gpu_percent": {
+        "mean": 49,
+        "median": 49,
+        "p95": 49,
+        "samples": 1
+      },
+      "gpu_memory_mib": {
+        "mean": 493,
+        "median": 493,
+        "p95": 493,
+        "samples": 1
+      }
+    },
+    {
+      "update": 3,
+      "cpu_percent": {
+        "mean": 97.3,
+        "median": 97.3,
+        "p95": 97.3,
+        "samples": 1
+      },
+      "gpu_percent": {
+        "mean": 96,
+        "median": 96,
+        "p95": 96,
+        "samples": 1
+      },
+      "gpu_memory_mib": {
+        "mean": 493,
+        "median": 493,
+        "p95": 493,
+        "samples": 1
+      }
+    }
+  ],
+  "training": {
+    "updates": 3,
+    "device": "cuda",
+    "feature_identity": "3dae648bb24075075cccfaa0b22020b5075859506f841bae52429520c0f1ccc4",
+    "timings": [
+      {
+        "update": 1,
+        "epoch": 1,
+        "seconds": 1.072435869000401,
+        "loss": 0.5627090930938721,
+        "peak_allocated_bytes": 113767936
+      },
+      {
+        "update": 2,
+        "epoch": 1,
+        "seconds": 0.2991634140007591,
+        "loss": 0.8697635531425476,
+        "peak_allocated_bytes": 138038784
+      },
+      {
+        "update": 3,
+        "epoch": 1,
+        "seconds": 0.30273648900038097,
+        "loss": 0.3906989097595215,
+        "peak_allocated_bytes": 138038784
+      }
+    ],
+    "losses": [
+      0.5627090930938721,
+      0.8697635531425476,
+      0.3906989097595215
+    ]
+  },
+  "snapshot": "/content/runs/pytorch-implementation-20260919-225642",
+  "tests": {
+    "exit": 0,
+    "output": "...........                                                              [100%]\n11 passed in 6.79s\n"
+  },
+  "wheel": {
+    "contains_trainer": true,
+    "dependencies": [
+      "Requires-Dist: mlx<0.33,>=0.32.2",
+      "Requires-Dist: numpy>=2",
+      "Requires-Dist: safetensors",
+      "Provides-Extra: torch",
+      "Requires-Dist: torch; extra == \"torch\"",
+      "Provides-Extra: cuda",
+      "Requires-Dist: mlx[cuda]<0.33,>=0.32.2; extra == \"cuda\"",
+      "Provides-Extra: dev",
+      "Requires-Dist: ruff>=0.12; extra == \"dev\"",
+      "Provides-Extra: conversion",
+      "Requires-Dist: coremltools; extra == \"conversion\"",
+      "Requires-Dist: torch; extra == \"conversion\""
+    ]
+  },
+  "artifacts": {
+    "training/model.safetensors": 11531644,
+    "training/training_summary.json": 720,
+    "training/config.json": 654,
+    "training/update-00000003/model.safetensors": 11531644,
+    "training/update-00000003/checkpoint.pt": 34665835
+  }
+}
+
+

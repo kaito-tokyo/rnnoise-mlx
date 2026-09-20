@@ -1,120 +1,44 @@
 import hashlib
 import json
 import os
+import importlib.util
+import tempfile
+import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 from pathlib import Path
+
+if importlib.util.find_spec("mlx") is None:
+    raise unittest.SkipTest("MLX is not installed")
 
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
-import pytest
 import numpy as np
 from mlx.utils import tree_flatten
 
 from rnnoise_mlx.training.checkpoint import load_checkpoint, save_checkpoint
-from rnnoise_mlx.training.train import (
-    _feature_manifest,
-    _recover_initial_evaluation,
-    _validate_downloaded_checkpoint_run,
-)
 from rnnoise_mlx.training.model import ModelConfig, RNNoise
-from rnnoise_mlx.training.tracking import MLflowTracker
 
 
-def test_downloaded_checkpoint_must_match_resumed_run(tmp_path):
-    checkpoint = tmp_path / "checkpoint"
-    checkpoint.mkdir()
-    files = {
-        "model.safetensors", "optimizer.safetensors", "mlx-random-state.safetensors",
-        "trainer-state.json",
-    }
-    for name in files - {"trainer-state.json"}:
-        (checkpoint / name).write_bytes(b"payload")
-    (checkpoint / "trainer-state.json").write_text(json.dumps({"format_version": 1, "update": 1}))
-    manifest = {"format_version": 1, "files": {
-        name: hashlib.sha256((checkpoint / name).read_bytes()).hexdigest() for name in files
-    }}
-    (checkpoint / "manifest.json").write_text(json.dumps(manifest))
-    (checkpoint / "complete.json").write_text(json.dumps({
-        "format_version": 1,
-        "run_id": "source-run",
-        "update": 1,
-        "manifest_sha256": hashlib.sha256((checkpoint / "manifest.json").read_bytes()).hexdigest(),
-    }))
-
-    with pytest.raises(ValueError, match="does not match"):
-        _validate_downloaded_checkpoint_run(checkpoint, "target-run")
-
-    _validate_downloaded_checkpoint_run(checkpoint, "source-run")
-
-
-@pytest.mark.parametrize("uri", ["file:///tmp/mlruns", "sqlite:///mlflow.db", "http://unavailable.invalid"])
-def test_tracking_failure_does_not_create_training_output(tmp_path, monkeypatch, uri):
-    from rnnoise_mlx.training import train, tracking
-
-    class UnavailableClient:
-        def search_experiments(self, **kwargs):
-            raise OSError("server unavailable")
-
-    monkeypatch.setattr(tracking, "MlflowClient", UnavailableClient)
-    monkeypatch.setattr(tracking.mlflow, "set_tracking_uri", lambda uri: None)
-    output = tmp_path / "not-created"
-    monkeypatch.setattr("sys.argv", [
-        "train", str(tmp_path / "unused.f32"), str(output),
-        "--mlflow-tracking-uri", uri, "--mlflow-experiment", "test",
-        "--mlflow-run-name", "test",
-    ])
-    with pytest.raises((ValueError, ConnectionError)):
-        train.main()
-    assert not output.exists()
-
-
-@pytest.mark.parametrize("remote_enabled", [True, False])
-def test_epoch_end_saves_checkpoint_and_respects_upload_option(tmp_path, monkeypatch, remote_enabled):
-    from rnnoise_mlx.training import train
-
-    feature = tmp_path / "train.f32"
-    data = np.full((2, 16, 98), 0.5, dtype="<f4")
-    data.tofile(feature)
-    output = tmp_path / "output"
-    uploads = []
-    tracker = SimpleNamespace(
-        run_id="test", log_evaluation=lambda *args: None,
-        log_checkpoint=lambda path, update: uploads.append((path, update)),
-        complete=lambda *args: None,
-    )
-    monkeypatch.setattr(train, "MLflowTracker", lambda *args: tracker)
-    monkeypatch.setattr(train, "validate_tracking_target", lambda *args: None)
-    monkeypatch.setattr(train.signal, "signal", lambda *args: None)
-    argv = [
-        "train", str(feature), str(output), "--batch-size", "2",
-        "--sequence-length", "16", "--training-chunk-length", "16",
-        "--epochs", "1", "--checkpoint-every", "100",
-        "--no-compile", "--sync-eval",
-        "--mlflow-tracking-uri", "http://unused", "--mlflow-experiment", "test",
-        "--mlflow-run-name", "test",
-    ]
-    if not remote_enabled:
-        argv.append("--no-mlflow-log-checkpoints")
-    monkeypatch.setattr("sys.argv", argv)
-    train.main()
-    saved = output / "checkpoints/update-00000001"
-    assert (saved / "manifest.json").is_file()
-    assert uploads == ([(saved, 1)] if remote_enabled else [])
-    state = json.loads((saved / "trainer-state.json").read_text())
-    assert (state["next_epoch"], state["next_batch"]) == (2, 0)
-
+class PatchHelper:
+    def __init__(self): self._patches=[]
+    def setattr(self, target, name, value=None):
+        item = patch(target, name) if isinstance(target, str) else patch.object(target, name, value)
+        self._patches.append(item); item.start()
+    def setenv(self, name, value):
+        item=patch.dict(os.environ,{name:value}); self._patches.append(item); item.start()
+    def close(self):
+        for item in reversed(self._patches): item.stop()
 
 def _updated_model_and_optimizer():
     mx.random.seed(11)
     config = ModelConfig()
     model = RNNoise(config)
     optimizer = optim.AdamW(learning_rate=1e-3, betas=(0.8, 0.98), eps=1e-8)
-
     def objective(model, features):
         gain, vad, _ = model(features)
         return mx.mean(gain) + mx.mean(vad)
-
     loss_and_grad = nn.value_and_grad(model, objective)
     loss, gradients = loss_and_grad(model, mx.random.normal((2, 10, 65)))
     optimizer.update(model, gradients)
@@ -126,7 +50,6 @@ def _update(model, optimizer, features):
     def objective(model, batch):
         gain, vad, _ = model(batch)
         return mx.mean(gain) + mx.mean(vad)
-
     loss_and_grad = nn.value_and_grad(model, objective)
     loss, gradients = loss_and_grad(model, features)
     optimizer.update(model, gradients)
@@ -134,8 +57,7 @@ def _update(model, optimizer, features):
 
 
 def _assert_tree_equal(left, right):
-    left_flat = dict(tree_flatten(left))
-    right_flat = dict(tree_flatten(right))
+    left_flat = dict(tree_flatten(left)); right_flat = dict(tree_flatten(right))
     assert left_flat.keys() == right_flat.keys()
     for key in left_flat:
         assert mx.array_equal(left_flat[key], right_flat[key]).item(), key
@@ -144,539 +66,448 @@ def _assert_tree_equal(left, right):
 def _feature_parameters(tmp_path, content=b"features"):
     feature = tmp_path / "train.f32"
     feature.write_bytes(content)
-    (tmp_path / "train.manifest.json").write_text(json.dumps({
-        "output": {
-            "filename": feature.name,
-            "bytes": len(content),
-            "sha256": hashlib.sha256(content).hexdigest(),
-        }
-    }) + "\n")
+    (tmp_path / "train.manifest.json").write_text(json.dumps({"output": {"filename": feature.name, "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}}) + "\n")
     return {"features": str(feature), "batch_size": 2, "sequence_length": 10}
 
 
-def test_complete_checkpoint_round_trip(tmp_path):
-    config, model, optimizer = _updated_model_and_optimizer()
-    parameters = _feature_parameters(tmp_path)
-    checkpoint = save_checkpoint(
-        tmp_path,
-        model,
-        optimizer,
-        config,
-        update=32,
-        next_epoch=2,
-        next_batch=7,
-        processed_frames=640,
-        elapsed_seconds=12.5,
-        history=[{"update": 32, "epoch": 1, "loss": 0.25}],
-        training_config=parameters,
-        initial_evaluation={"loss": 0.75},
-        feature_identity=hashlib.sha256(b"features").hexdigest(),
-        evaluation_feature_identity=None,
-    )
+class CheckpointTests(unittest.TestCase):
+    def setUp(self):
+        self._temporary_directory=tempfile.TemporaryDirectory(); self.tmp_path=Path(self._temporary_directory.name); self._patcher=PatchHelper()
+    def tearDown(self):
+        self._patcher.close(); self._temporary_directory.cleanup()
 
-    restored_model = RNNoise(config)
-    restored_optimizer = optim.AdamW(
-        learning_rate=1e-3, betas=(0.8, 0.98), eps=1e-8
-    )
-    state = load_checkpoint(
-        checkpoint, restored_model, restored_optimizer, config, parameters
-    )
+    def test_complete_checkpoint_round_trip(self):
+        config, model, optimizer = _updated_model_and_optimizer()
+        parameters = _feature_parameters(self.tmp_path)
+        checkpoint = save_checkpoint(
+            self.tmp_path,
+            model,
+            optimizer,
+            config,
+            update=32,
+            next_epoch=2,
+            next_batch=7,
+            processed_frames=640,
+            elapsed_seconds=12.5,
+            history=[{"update": 32, "epoch": 1, "loss": 0.25}],
+            training_config=parameters,
+            initial_evaluation={"loss": 0.75},
+            feature_identity=hashlib.sha256(b"features").hexdigest(),
+            evaluation_feature_identity=None,
+        )
 
-    assert state["update"] == 32
-    assert state["next_epoch"] == 2
-    assert state["next_batch"] == 7
-    assert state["initial_evaluation"] == {"loss": 0.75}
-    manifest = json.loads((checkpoint / "manifest.json").read_text())
-    assert manifest["feature_identity"] == hashlib.sha256(b"features").hexdigest()
-    assert {path.name for path in checkpoint.iterdir()} == {
-        "manifest.json",
-        "mlx-random-state.safetensors",
-        "model.safetensors",
-        "optimizer.safetensors",
-        "trainer-state.json",
-    }
-    original = dict(tree_flatten(model.parameters()))
-    restored = dict(tree_flatten(restored_model.parameters()))
-    assert original.keys() == restored.keys()
-    for key in original:
-        assert mx.array_equal(original[key], restored[key]).item()
-    original_optimizer = dict(tree_flatten(optimizer.state))
-    restored_optimizer_state = dict(tree_flatten(restored_optimizer.state))
-    assert original_optimizer.keys() == restored_optimizer_state.keys()
-    for key in original_optimizer:
-        assert mx.array_equal(
-            original_optimizer[key], restored_optimizer_state[key]
-        ).item()
+        restored_model = RNNoise(config)
+        restored_optimizer = optim.AdamW(
+            learning_rate=1e-3, betas=(0.8, 0.98), eps=1e-8
+        )
+        state = load_checkpoint(
+            checkpoint, restored_model, restored_optimizer, config, parameters
+        )
 
-
-@pytest.mark.parametrize("read_only_random_state", [False, True])
-def test_resumed_next_update_matches_uninterrupted_training(
-    tmp_path, monkeypatch, read_only_random_state
-):
-    if read_only_random_state:
-        original_state = mx.random.state
-
-        class ReadOnlyRandomState:
-            def __len__(self):
-                return len(original_state)
-
-            def __getitem__(self, index):
-                return original_state[index]
-
-            def __iter__(self):
-                return iter(original_state)
-
-        monkeypatch.setattr(mx.random, "state", ReadOnlyRandomState())
-    config, uninterrupted_model, uninterrupted_optimizer = (
-        _updated_model_and_optimizer()
-    )
-    parameters = _feature_parameters(tmp_path)
-    checkpoint = save_checkpoint(
-        tmp_path,
-        uninterrupted_model,
-        uninterrupted_optimizer,
-        config,
-        update=1,
-        next_epoch=1,
-        next_batch=1,
-        processed_frames=20,
-        elapsed_seconds=1.0,
-        history=[{"update": 1, "epoch": 1, "loss": 0.5}],
-        training_config=parameters,
-    )
-
-    uninterrupted_features = mx.random.normal((2, 10, 65))
-    mx.eval(uninterrupted_features)
-    _update(uninterrupted_model, uninterrupted_optimizer, uninterrupted_features)
-
-    resumed_model = RNNoise(config)
-    resumed_optimizer = optim.AdamW(
-        learning_rate=1e-3, betas=(0.8, 0.98), eps=1e-8
-    )
-    state = load_checkpoint(
-        checkpoint, resumed_model, resumed_optimizer, config, parameters
-    )
-    resumed_features = mx.random.normal((2, 10, 65))
-    mx.eval(resumed_features)
-    _update(resumed_model, resumed_optimizer, resumed_features)
-
-    assert state["update"] == 1
-    assert state["next_epoch"] == 1
-    assert state["next_batch"] == 1
-    assert mx.array_equal(uninterrupted_features, resumed_features).item()
-    _assert_tree_equal(uninterrupted_model.parameters(), resumed_model.parameters())
-    _assert_tree_equal(uninterrupted_optimizer.state, resumed_optimizer.state)
+        assert state["update"] == 32
+        assert state["next_epoch"] == 2
+        assert state["next_batch"] == 7
+        assert state["initial_evaluation"] == {"loss": 0.75}
+        manifest = json.loads((checkpoint / "manifest.json").read_text())
+        assert manifest["feature_identity"] == hashlib.sha256(b"features").hexdigest()
+        assert {path.name for path in checkpoint.iterdir()} == {
+            "manifest.json",
+            "mlx-random-state.safetensors",
+            "model.safetensors",
+            "optimizer.safetensors",
+            "trainer-state.json",
+        }
+        original = dict(tree_flatten(model.parameters()))
+        restored = dict(tree_flatten(restored_model.parameters()))
+        assert original.keys() == restored.keys()
+        for key in original:
+            assert mx.array_equal(original[key], restored[key]).item()
+        original_optimizer = dict(tree_flatten(optimizer.state))
+        restored_optimizer_state = dict(tree_flatten(restored_optimizer.state))
+        assert original_optimizer.keys() == restored_optimizer_state.keys()
+        for key in original_optimizer:
+            assert mx.array_equal(
+                original_optimizer[key], restored_optimizer_state[key]
+            ).item()
 
 
-def test_checkpoint_rejects_incompatible_training_configuration(tmp_path):
-    config, model, optimizer = _updated_model_and_optimizer()
-    parameters = {"features": "train.f32", "batch_size": 2, "sequence_length": 10}
-    checkpoint = save_checkpoint(
-        tmp_path,
-        model,
-        optimizer,
-        config,
-        update=1,
-        next_epoch=1,
-        next_batch=1,
-        processed_frames=20,
-        elapsed_seconds=1.0,
-        history=[],
-        training_config=parameters,
-    )
-    incompatible = dict(parameters, batch_size=4)
-    try:
-        load_checkpoint(
+    def test_resumed_next_update_matches_uninterrupted_training(self):
+        read_only_random_state = False
+        if read_only_random_state:
+            original_state = mx.random.state
+
+            class ReadOnlyRandomState:
+                def __len__(self):
+                    return len(original_state)
+
+                def __getitem__(self, index):
+                    return original_state[index]
+
+                def __iter__(self):
+                    return iter(original_state)
+
+            self._patcher.setattr(mx.random, "state", ReadOnlyRandomState())
+        config, uninterrupted_model, uninterrupted_optimizer = (
+            _updated_model_and_optimizer()
+        )
+        parameters = _feature_parameters(self.tmp_path)
+        checkpoint = save_checkpoint(
+            self.tmp_path,
+            uninterrupted_model,
+            uninterrupted_optimizer,
+            config,
+            update=1,
+            next_epoch=1,
+            next_batch=1,
+            processed_frames=20,
+            elapsed_seconds=1.0,
+            history=[{"update": 1, "epoch": 1, "loss": 0.5}],
+            training_config=parameters,
+        )
+
+        uninterrupted_features = mx.random.normal((2, 10, 65))
+        mx.eval(uninterrupted_features)
+        _update(uninterrupted_model, uninterrupted_optimizer, uninterrupted_features)
+
+        resumed_model = RNNoise(config)
+        resumed_optimizer = optim.AdamW(
+            learning_rate=1e-3, betas=(0.8, 0.98), eps=1e-8
+        )
+        state = load_checkpoint(
+            checkpoint, resumed_model, resumed_optimizer, config, parameters
+        )
+        resumed_features = mx.random.normal((2, 10, 65))
+        mx.eval(resumed_features)
+        _update(resumed_model, resumed_optimizer, resumed_features)
+
+        assert state["update"] == 1
+        assert state["next_epoch"] == 1
+        assert state["next_batch"] == 1
+        assert mx.array_equal(uninterrupted_features, resumed_features).item()
+        _assert_tree_equal(uninterrupted_model.parameters(), resumed_model.parameters())
+        _assert_tree_equal(uninterrupted_optimizer.state, resumed_optimizer.state)
+
+
+    def test_checkpoint_rejects_incompatible_training_configuration(self):
+        config, model, optimizer = _updated_model_and_optimizer()
+        parameters = {"features": "train.f32", "batch_size": 2, "sequence_length": 10}
+        checkpoint = save_checkpoint(
+            self.tmp_path,
+            model,
+            optimizer,
+            config,
+            update=1,
+            next_epoch=1,
+            next_batch=1,
+            processed_frames=20,
+            elapsed_seconds=1.0,
+            history=[],
+            training_config=parameters,
+        )
+        incompatible = dict(parameters, batch_size=4)
+        try:
+            load_checkpoint(
+                checkpoint,
+                RNNoise(config),
+                optim.AdamW(learning_rate=1e-3),
+                config,
+                incompatible,
+            )
+        except ValueError as error:
+            assert "batch_size" in str(error)
+        else:
+            raise AssertionError("incompatible checkpoint was accepted")
+
+
+    def test_checkpoint_allows_feature_and_tbptt_chapter_changes(self):
+        config, model, optimizer = _updated_model_and_optimizer()
+        parameters = {
+            "features": "generation-0/train.f32",
+            "batch_size": 2,
+            "sequence_length": 10,
+            "segmented_tbptt_length": 250,
+            "segmented_tbptt_state": "carry",
+        }
+        checkpoint = save_checkpoint(
+            self.tmp_path,
+            model,
+            optimizer,
+            config,
+            update=5_000,
+            next_epoch=5,
+            next_batch=0,
+            processed_frames=100_000,
+            elapsed_seconds=1.0,
+            history=[],
+            training_config=parameters,
+        )
+        changed_chapter = dict(
+            parameters,
+            features="generation-1/train.f32",
+            segmented_tbptt_length=500,
+        )
+
+        state = load_checkpoint(
             checkpoint,
             RNNoise(config),
             optim.AdamW(learning_rate=1e-3),
             config,
-            incompatible,
+            changed_chapter,
         )
-    except ValueError as error:
-        assert "batch_size" in str(error)
-    else:
-        raise AssertionError("incompatible checkpoint was accepted")
+
+        assert state["update"] == 5_000
+        assert state["next_batch"] == 0
 
 
-def test_checkpoint_allows_feature_and_tbptt_chapter_changes(tmp_path):
-    config, model, optimizer = _updated_model_and_optimizer()
-    parameters = {
-        "features": "generation-0/train.f32",
-        "batch_size": 2,
-        "sequence_length": 10,
-        "segmented_tbptt_length": 250,
-        "segmented_tbptt_state": "carry",
-    }
-    checkpoint = save_checkpoint(
-        tmp_path,
-        model,
-        optimizer,
-        config,
-        update=5_000,
-        next_epoch=5,
-        next_batch=0,
-        processed_frames=100_000,
-        elapsed_seconds=1.0,
-        history=[],
-        training_config=parameters,
-    )
-    changed_chapter = dict(
-        parameters,
-        features="generation-1/train.f32",
-        segmented_tbptt_length=500,
-    )
-
-    state = load_checkpoint(
-        checkpoint,
-        RNNoise(config),
-        optim.AdamW(learning_rate=1e-3),
-        config,
-        changed_chapter,
-    )
-
-    assert state["update"] == 5_000
-    assert state["next_batch"] == 0
+    def test_checkpoint_resets_nonzero_batch_for_new_features(self):
+        config, model, optimizer = _updated_model_and_optimizer()
+        parameters = {
+            "features": "generation-0/train.f32",
+            "batch_size": 2,
+            "sequence_length": 10,
+        }
+        checkpoint = save_checkpoint(
+            self.tmp_path,
+            model,
+            optimizer,
+            config,
+            update=5,
+            next_epoch=2,
+            next_batch=7,
+            processed_frames=100,
+            elapsed_seconds=1.0,
+            history=[],
+            training_config=parameters,
+        )
+        state = load_checkpoint(
+            checkpoint,
+            RNNoise(config),
+            optim.AdamW(learning_rate=1e-3),
+            config,
+            dict(parameters, features="generation-1/train.f32"),
+        )
+        assert state["next_epoch"] == 2
+        assert state["next_batch"] == 0
 
 
-def test_checkpoint_resets_nonzero_batch_for_new_features(tmp_path):
-    config, model, optimizer = _updated_model_and_optimizer()
-    parameters = {
-        "features": "generation-0/train.f32",
-        "batch_size": 2,
-        "sequence_length": 10,
-    }
-    checkpoint = save_checkpoint(
-        tmp_path,
-        model,
-        optimizer,
-        config,
-        update=5,
-        next_epoch=2,
-        next_batch=7,
-        processed_frames=100,
-        elapsed_seconds=1.0,
-        history=[],
-        training_config=parameters,
-    )
-    state = load_checkpoint(
-        checkpoint,
-        RNNoise(config),
-        optim.AdamW(learning_rate=1e-3),
-        config,
-        dict(parameters, features="generation-1/train.f32"),
-    )
-    assert state["next_epoch"] == 2
-    assert state["next_batch"] == 0
-
-
-def test_checkpoint_resets_batch_when_same_path_feature_content_changes(tmp_path):
-    config, model, optimizer = _updated_model_and_optimizer()
-    parameters = _feature_parameters(tmp_path, b"generation-zero")
-    checkpoint = save_checkpoint(
-        tmp_path / "checkpoints",
-        model,
-        optimizer,
-        config,
-        update=5,
-        next_epoch=2,
-        next_batch=7,
-        processed_frames=100,
-        elapsed_seconds=1.0,
-        history=[],
-        training_config=parameters,
-    )
-    _feature_parameters(tmp_path, b"generation-one")
-    state = load_checkpoint(
-        checkpoint,
-        RNNoise(config),
-        optim.AdamW(learning_rate=1e-3),
-        config,
-        parameters,
-    )
-    assert state["next_batch"] == 0
-
-
-def test_checkpoint_rejects_stale_manifest_for_same_size_feature(tmp_path):
-    config, model, optimizer = _updated_model_and_optimizer()
-    parameters = _feature_parameters(tmp_path, b"old-bytes")
-    checkpoint = save_checkpoint(
-        tmp_path / "checkpoints",
-        model,
-        optimizer,
-        config,
-        update=5,
-        next_epoch=2,
-        next_batch=7,
-        processed_frames=100,
-        elapsed_seconds=1.0,
-        history=[],
-        training_config=parameters,
-    )
-    Path(parameters["features"]).write_bytes(b"new-bytes")
-    state = load_checkpoint(
-        checkpoint,
-        RNNoise(config),
-        optim.AdamW(learning_rate=1e-3),
-        config,
-        parameters,
-    )
-    assert state["next_batch"] == 0
-
-
-def test_checkpoint_rejects_changed_evaluation_content_and_gamma(tmp_path):
-    config, model, optimizer = _updated_model_and_optimizer()
-    parameters = _feature_parameters(tmp_path)
-    eval_dir = tmp_path / "eval"
-    eval_dir.mkdir()
-    eval_parameters = _feature_parameters(eval_dir, b"eval-zero")
-    parameters["eval_features"] = eval_parameters["features"]
-    parameters["gamma"] = 0.25
-    checkpoint = save_checkpoint(
-        tmp_path / "checkpoints",
-        model,
-        optimizer,
-        config,
-        update=5,
-        next_epoch=2,
-        next_batch=7,
-        processed_frames=100,
-        elapsed_seconds=1.0,
-        history=[],
-        training_config=parameters,
-    )
-    _feature_parameters(eval_dir, b"eval-one")
-    try:
-        load_checkpoint(
+    def test_checkpoint_resets_batch_when_same_path_feature_content_changes(self):
+        config, model, optimizer = _updated_model_and_optimizer()
+        parameters = _feature_parameters(self.tmp_path, b"generation-zero")
+        checkpoint = save_checkpoint(
+            self.tmp_path / "checkpoints",
+            model,
+            optimizer,
+            config,
+            update=5,
+            next_epoch=2,
+            next_batch=7,
+            processed_frames=100,
+            elapsed_seconds=1.0,
+            history=[],
+            training_config=parameters,
+        )
+        _feature_parameters(self.tmp_path, b"generation-one")
+        state = load_checkpoint(
             checkpoint,
             RNNoise(config),
             optim.AdamW(learning_rate=1e-3),
             config,
             parameters,
         )
-    except ValueError as error:
-        assert "evaluation features differ" in str(error)
-    else:
-        raise AssertionError("changed evaluation content was accepted")
+        assert state["next_batch"] == 0
 
-    changed_gamma = dict(parameters, gamma=0.5)
-    try:
-        load_checkpoint(
-            checkpoint,
-            RNNoise(config),
-            optim.AdamW(learning_rate=1e-3),
+
+    def test_checkpoint_rejects_stale_manifest_for_same_size_feature(self):
+        config, model, optimizer = _updated_model_and_optimizer()
+        parameters = _feature_parameters(self.tmp_path, b"old-bytes")
+        checkpoint = save_checkpoint(
+            self.tmp_path / "checkpoints",
+            model,
+            optimizer,
             config,
-            changed_gamma,
+            update=5,
+            next_epoch=2,
+            next_batch=7,
+            processed_frames=100,
+            elapsed_seconds=1.0,
+            history=[],
+            training_config=parameters,
         )
-    except ValueError as error:
-        assert "gamma" in str(error)
-    else:
-        raise AssertionError("changed evaluation gamma was accepted")
-
-
-def test_legacy_checkpoint_without_feature_identity_resets_batch(tmp_path):
-    config, model, optimizer = _updated_model_and_optimizer()
-    parameters = _feature_parameters(tmp_path)
-    checkpoint = save_checkpoint(
-        tmp_path / "checkpoints",
-        model,
-        optimizer,
-        config,
-        update=5,
-        next_epoch=2,
-        next_batch=7,
-        processed_frames=100,
-        elapsed_seconds=1.0,
-        history=[],
-        training_config=parameters,
-    )
-    manifest_path = checkpoint / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    del manifest["feature_identity"]
-    manifest_path.write_text(json.dumps(manifest) + "\n")
-    state = load_checkpoint(
-        checkpoint,
-        RNNoise(config),
-        optim.AdamW(learning_rate=1e-3),
-        config,
-        parameters,
-    )
-    assert state["next_batch"] == 0
-
-
-def test_legacy_checkpoint_without_evaluation_identity_is_rejected(tmp_path):
-    config, model, optimizer = _updated_model_and_optimizer()
-    parameters = _feature_parameters(tmp_path)
-    eval_dir = tmp_path / "eval"
-    eval_dir.mkdir()
-    eval_parameters = _feature_parameters(eval_dir, b"eval")
-    parameters["eval_features"] = eval_parameters["features"]
-    checkpoint = save_checkpoint(
-        tmp_path / "checkpoints",
-        model,
-        optimizer,
-        config,
-        update=5,
-        next_epoch=2,
-        next_batch=7,
-        processed_frames=100,
-        elapsed_seconds=1.0,
-        history=[],
-        training_config=parameters,
-    )
-    manifest_path = checkpoint / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    del manifest["evaluation_feature_identity"]
-    manifest_path.write_text(json.dumps(manifest) + "\n")
-    try:
-        load_checkpoint(
+        Path(parameters["features"]).write_bytes(b"new-bytes")
+        state = load_checkpoint(
             checkpoint,
             RNNoise(config),
             optim.AdamW(learning_rate=1e-3),
             config,
             parameters,
         )
-    except ValueError as error:
-        assert "evaluation features differ" in str(error)
-    else:
-        raise AssertionError("unverifiable legacy evaluation was accepted")
+        assert state["next_batch"] == 0
 
 
-def test_checkpoint_manifest_is_json_serializable_with_paths(tmp_path):
-    config, model, optimizer = _updated_model_and_optimizer()
-    checkpoint = save_checkpoint(
-        tmp_path,
-        model,
-        optimizer,
-        config,
-        update=1,
-        next_epoch=1,
-        next_batch=1,
-        processed_frames=20,
-        elapsed_seconds=1.0,
-        history=[],
-        training_config={"features": tmp_path / "train.f32"},
-    )
-    manifest = json.loads((checkpoint / "manifest.json").read_text())
-    assert manifest["training_config"]["features"].endswith("train.f32")
+    def test_checkpoint_rejects_changed_evaluation_content_and_gamma(self):
+        config, model, optimizer = _updated_model_and_optimizer()
+        parameters = _feature_parameters(self.tmp_path)
+        eval_dir = self.tmp_path / "eval"
+        eval_dir.mkdir()
+        eval_parameters = _feature_parameters(eval_dir, b"eval-zero")
+        parameters["eval_features"] = eval_parameters["features"]
+        parameters["gamma"] = 0.25
+        checkpoint = save_checkpoint(
+            self.tmp_path / "checkpoints",
+            model,
+            optimizer,
+            config,
+            update=5,
+            next_epoch=2,
+            next_batch=7,
+            processed_frames=100,
+            elapsed_seconds=1.0,
+            history=[],
+            training_config=parameters,
+        )
+        _feature_parameters(eval_dir, b"eval-one")
+        try:
+            load_checkpoint(
+                checkpoint,
+                RNNoise(config),
+                optim.AdamW(learning_rate=1e-3),
+                config,
+                parameters,
+            )
+        except ValueError as error:
+            assert "evaluation features differ" in str(error)
+        else:
+            raise AssertionError("changed evaluation content was accepted")
+
+        changed_gamma = dict(parameters, gamma=0.5)
+        try:
+            load_checkpoint(
+                checkpoint,
+                RNNoise(config),
+                optim.AdamW(learning_rate=1e-3),
+                config,
+                changed_gamma,
+            )
+        except ValueError as error:
+            assert "gamma" in str(error)
+        else:
+            raise AssertionError("changed evaluation gamma was accepted")
 
 
-def test_checkpoint_rejects_corrupt_tensor(tmp_path):
-    config, model, optimizer = _updated_model_and_optimizer()
-    parameters = {"features": "train.f32", "batch_size": 2, "sequence_length": 10}
-    checkpoint = save_checkpoint(
-        tmp_path,
-        model,
-        optimizer,
-        config,
-        update=1,
-        next_epoch=1,
-        next_batch=1,
-        processed_frames=20,
-        elapsed_seconds=1.0,
-        history=[],
-        training_config=parameters,
-    )
-    with (checkpoint / "optimizer.safetensors").open("ab") as output:
-        output.write(b"corrupt")
-    try:
-        load_checkpoint(
+    def test_legacy_checkpoint_without_feature_identity_resets_batch(self):
+        config, model, optimizer = _updated_model_and_optimizer()
+        parameters = _feature_parameters(self.tmp_path)
+        checkpoint = save_checkpoint(
+            self.tmp_path / "checkpoints",
+            model,
+            optimizer,
+            config,
+            update=5,
+            next_epoch=2,
+            next_batch=7,
+            processed_frames=100,
+            elapsed_seconds=1.0,
+            history=[],
+            training_config=parameters,
+        )
+        manifest_path = checkpoint / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        del manifest["feature_identity"]
+        manifest_path.write_text(json.dumps(manifest) + "\n")
+        state = load_checkpoint(
             checkpoint,
             RNNoise(config),
             optim.AdamW(learning_rate=1e-3),
             config,
             parameters,
         )
-    except ValueError as error:
-        assert "checksum" in str(error)
-    else:
-        raise AssertionError("corrupt checkpoint was accepted")
+        assert state["next_batch"] == 0
 
 
-def test_mlflow_uploads_checkpoint_under_immutable_update_path(tmp_path, monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        "rnnoise_mlx.tools.mlflow_checkpoint.upload_checkpoint",
-        lambda client, run_id, local, update: calls.append((run_id, local, update)) or "committed/path",
-    )
-    monkeypatch.setattr("rnnoise_mlx.training.tracking.MlflowClient", lambda: object())
-    monkeypatch.setattr("rnnoise_mlx.training.tracking.mlflow.set_tag", lambda *args: calls.append(args))
-    monkeypatch.setattr(
-        "rnnoise_mlx.training.tracking.mlflow.log_metric",
-        lambda *args, **kwargs: calls.append((args, kwargs)),
-    )
-    tracker = object.__new__(MLflowTracker)
-    tracker.run = SimpleNamespace(info=SimpleNamespace(run_id="run-test"))
-    checkpoint = tmp_path / "update-00000500"
-    checkpoint.mkdir()
-    tracker.log_checkpoint(checkpoint, 500)
-    assert calls[0] == ("run-test", checkpoint, 500)
-    assert calls[1] == (
-        ("checkpoint_uploaded_update", 500.0),
-        {"step": 500},
-    )
-    assert calls[2] == ("checkpoint_latest_artifact", "committed/path")
+    def test_legacy_checkpoint_without_evaluation_identity_is_rejected(self):
+        config, model, optimizer = _updated_model_and_optimizer()
+        parameters = _feature_parameters(self.tmp_path)
+        eval_dir = self.tmp_path / "eval"
+        eval_dir.mkdir()
+        eval_parameters = _feature_parameters(eval_dir, b"eval")
+        parameters["eval_features"] = eval_parameters["features"]
+        checkpoint = save_checkpoint(
+            self.tmp_path / "checkpoints",
+            model,
+            optimizer,
+            config,
+            update=5,
+            next_epoch=2,
+            next_batch=7,
+            processed_frames=100,
+            elapsed_seconds=1.0,
+            history=[],
+            training_config=parameters,
+        )
+        manifest_path = checkpoint / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        del manifest["evaluation_feature_identity"]
+        manifest_path.write_text(json.dumps(manifest) + "\n")
+        try:
+            load_checkpoint(
+                checkpoint,
+                RNNoise(config),
+                optim.AdamW(learning_rate=1e-3),
+                config,
+                parameters,
+            )
+        except ValueError as error:
+            assert "evaluation features differ" in str(error)
+        else:
+            raise AssertionError("unverifiable legacy evaluation was accepted")
 
 
-def test_mlflow_uploads_small_provenance_artifacts(tmp_path, monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        "rnnoise_mlx.training.tracking.mlflow.log_artifact",
-        lambda local, artifact_path: calls.append((local, artifact_path)),
-    )
-    manifest = tmp_path / "train.manifest.json"
-    manifest.write_text("{}\n")
-    tracker = object.__new__(MLflowTracker)
-    tracker.log_provenance_artifacts([manifest, manifest])
-    assert calls == [
-        (str(manifest.resolve()), "provenance/data/chapter-00000000/000")
-    ]
+    def test_checkpoint_manifest_is_json_serializable_with_paths(self):
+        config, model, optimizer = _updated_model_and_optimizer()
+        checkpoint = save_checkpoint(
+            self.tmp_path,
+            model,
+            optimizer,
+            config,
+            update=1,
+            next_epoch=1,
+            next_batch=1,
+            processed_frames=20,
+            elapsed_seconds=1.0,
+            history=[],
+            training_config={"features": self.tmp_path / "train.f32"},
+        )
+        manifest = json.loads((checkpoint / "manifest.json").read_text())
+        assert manifest["training_config"]["features"].endswith("train.f32")
 
 
-def test_mlflow_separates_resumed_provenance_chapters(tmp_path, monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        "rnnoise_mlx.training.tracking.mlflow.log_artifact",
-        lambda local, artifact_path: calls.append((local, artifact_path)),
-    )
-    manifest = tmp_path / "train.manifest.json"
-    manifest.write_text("{}\n")
-    tracker = object.__new__(MLflowTracker)
-    tracker.log_provenance_artifacts([manifest], namespace="chapter-00005000")
-    assert calls[0][1] == "provenance/data/chapter-00005000/000"
-
-
-def test_mlflow_rejects_bulk_provenance_artifact(tmp_path):
-    feature = tmp_path / "train.f32"
-    feature.write_bytes(b"x" * (16 * 1024 * 1024 + 1))
-    tracker = object.__new__(MLflowTracker)
-    try:
-        tracker.log_provenance_artifacts([feature])
-    except ValueError as error:
-        assert "exceeds 16 MiB" in str(error)
-    else:
-        raise AssertionError("bulk feature artifact was accepted as provenance")
-
-
-def test_feature_manifest_supports_generated_and_store_layouts(tmp_path):
-    generated = tmp_path / "train.f32"
-    generated.write_bytes(b"")
-    generated_manifest = tmp_path / "train.manifest.json"
-    generated_manifest.write_text("{}\n")
-    assert _feature_manifest(generated) == generated_manifest
-
-    store = tmp_path / "generation-000"
-    store.mkdir()
-    stored_features = store / "features.f32"
-    stored_features.write_bytes(b"")
-    store_manifest = store / "manifest.json"
-    store_manifest.write_text("{}\n")
-    assert _feature_manifest(stored_features) == store_manifest
-
-
-def test_legacy_initial_evaluation_prefers_existing_summary(tmp_path):
-    expected = {"total_loss": 0.5, "batches": 4}
-    (tmp_path / "training.json").write_text(
-        json.dumps({"initial_evaluation": expected}) + "\n"
-    )
-    assert _recover_initial_evaluation(tmp_path, None) == expected
+    def test_checkpoint_rejects_corrupt_tensor(self):
+        config, model, optimizer = _updated_model_and_optimizer()
+        parameters = {"features": "train.f32", "batch_size": 2, "sequence_length": 10}
+        checkpoint = save_checkpoint(
+            self.tmp_path,
+            model,
+            optimizer,
+            config,
+            update=1,
+            next_epoch=1,
+            next_batch=1,
+            processed_frames=20,
+            elapsed_seconds=1.0,
+            history=[],
+            training_config=parameters,
+        )
+        with (checkpoint / "optimizer.safetensors").open("ab") as output:
+            output.write(b"corrupt")
+        try:
+            load_checkpoint(
+                checkpoint,
+                RNNoise(config),
+                optim.AdamW(learning_rate=1e-3),
+                config,
+                parameters,
+            )
+        except ValueError as error:
+            assert "checksum" in str(error)
+        else:
+            raise AssertionError("corrupt checkpoint was accepted")

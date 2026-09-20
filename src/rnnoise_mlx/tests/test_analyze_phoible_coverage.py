@@ -1,6 +1,8 @@
 import csv
+from pathlib import Path
 
-import pytest
+import tempfile
+import unittest
 
 from rnnoise_mlx.tools.analyze_phoible_coverage import analyze
 
@@ -66,93 +68,102 @@ def selection():
     }
 
 
-def test_literal_segments_uncertainty_tones_and_cumulative(tmp_path):
-    fixture_cldf(tmp_path)
-    result = analyze(tmp_path, selection())
-    candidate = result["candidates"][0]
+class AnalyzePhoibleCoverageTests(unittest.TestCase):
+    def setUp(self):
+        self._temporary_directory = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._temporary_directory.name)
 
-    assert result["baseline_definite"] == {"consonant": ["s"], "vowel": [], "tone": []}
-    assert result["baseline_possible"] == {
-        "consonant": ["s", "θ"], "vowel": ["a"], "tone": ["˥"]
-    }
-    assert candidate["definitely_novel"]["consonant"] == ["sʰ", "sː", "ɕ"]
-    assert candidate["definitely_novel"]["tone"] == ["˩"]
-    assert candidate["overlapping"]["consonant"] == ["s"]
-    assert candidate["conditionally_novel"] == {"consonant": ["θ"], "vowel": [], "tone": ["˥"]}
-    assert result["cumulative_scenarios"][0]["steps"][0]["new_at_step"]["tone"] == ["˩"]
+    def tearDown(self):
+        self._temporary_directory.cleanup()
 
+    def test_literal_segments_uncertainty_tones_and_cumulative(self):
+        fixture_cldf(self.tmp_path)
+        result = analyze(self.tmp_path, selection())
+        candidate = result["candidates"][0]
 
-def test_missing_language_is_visible_and_does_not_require_substitute(tmp_path):
-    fixture_cldf(tmp_path)
-    result = analyze(tmp_path, selection())
-    missing = result["baseline"][1]
-    assert missing["mapping_status"] == "missing"
-    assert missing["inventories"] == []
-
-
-def test_external_inventory_can_fill_phoible_gap_without_becoming_candidate(tmp_path):
-    fixture_cldf(tmp_path)
-    config = selection()
-    config["baseline"][1] = {
-        "label": "external",
-        "mapping_status": "external-source-only",
-        "inventory_ids": [],
-        "external_inventories": [{
-            "source": "grammar", "segments": {"consonant": ["ɕ"], "vowel": [], "tone": ["˩"]}
-        }],
-    }
-    result = analyze(tmp_path, config)
-    assert "ɕ" in result["baseline_definite"]["consonant"]
-    assert "˩" in result["baseline_definite"]["tone"]
-    assert result["candidates"][0]["definitely_novel"]["consonant"] == ["sʰ", "sː"]
+        assert result["baseline_definite"] == {"consonant": ["s"], "vowel": [], "tone": []}
+        assert result["baseline_possible"] == {
+            "consonant": ["s", "θ"], "vowel": ["a"], "tone": ["˥"]
+        }
+        assert candidate["definitely_novel"]["consonant"] == ["sʰ", "sː", "ɕ"]
+        assert candidate["definitely_novel"]["tone"] == ["˩"]
+        assert candidate["overlapping"]["consonant"] == ["s"]
+        assert candidate["conditionally_novel"] == {"consonant": ["θ"], "vowel": [], "tone": ["˥"]}
+        assert result["cumulative_scenarios"][0]["steps"][0]["new_at_step"]["tone"] == ["˩"]
 
 
-def test_unknown_inventory_fails_instead_of_silently_becoming_empty(tmp_path):
-    fixture_cldf(tmp_path)
-    config = selection()
-    config["baseline"][0]["inventory_ids"] = ["999"]
-    with pytest.raises(ValueError, match="unknown or empty"):
-        analyze(tmp_path, config)
+    def test_missing_language_is_visible_and_does_not_require_substitute(self):
+        fixture_cldf(self.tmp_path)
+        result = analyze(self.tmp_path, selection())
+        missing = result["baseline"][1]
+        assert missing["mapping_status"] == "missing"
+        assert missing["inventories"] == []
 
 
-def test_result_is_deterministic_and_scenario_math_matches_candidate(tmp_path):
-    fixture_cldf(tmp_path)
-    first = analyze(tmp_path, selection())
-    second = analyze(tmp_path, selection())
-    assert first == second
-    candidate = first["candidates"][0]
-    step = first["cumulative_scenarios"][0]["steps"][0]
-    assert step["new_at_step"] == candidate["definitely_novel"]
+    def test_external_inventory_can_fill_phoible_gap_without_becoming_candidate(self):
+        fixture_cldf(self.tmp_path)
+        config = selection()
+        config["baseline"][1] = {
+            "label": "external",
+            "mapping_status": "external-source-only",
+            "inventory_ids": [],
+            "external_inventories": [{
+                "source": "grammar", "segments": {"consonant": ["ɕ"], "vowel": [], "tone": ["˩"]}
+            }],
+        }
+        result = analyze(self.tmp_path, config)
+        assert "ɕ" in result["baseline_definite"]["consonant"]
+        assert "˩" in result["baseline_definite"]["tone"]
+        assert result["candidates"][0]["definitely_novel"]["consonant"] == ["sʰ", "sː"]
 
 
-def test_scenario_summary_and_literal_superset_alternatives(tmp_path):
-    fixture_cldf(tmp_path)
-    config = selection()
-    config["cumulative_scenarios"].append(
-        {"label": "superset", "inventory_ids": ["4"]}
-    )
-    result = analyze(tmp_path, config)
-    selected, superset = result["cumulative_scenarios"]
-
-    assert result["schema_version"] == 2
-    assert selected["addition_counts"] == {"consonant": 3, "vowel": 0, "tone": 1}
-    assert superset["addition_counts"] == {"consonant": 3, "vowel": 1, "tone": 1}
-    assert selected["strictly_dominated_by"] == ["superset"]
-    assert superset["strictly_dominated_by"] == []
-    alternatives = selected["steps"][0]["covering_alternatives"]
-    assert [item["inventory_id"] for item in alternatives] == ["4"]
-    assert alternatives[0]["sources"] == ["d"]
-    assert alternatives[0]["url"] == "x"
-    assert alternatives[0]["additional_beyond_selected"] == {
-        "consonant": [], "vowel": ["i"], "tone": []
-    }
+    def test_unknown_inventory_fails_instead_of_silently_becoming_empty(self):
+        fixture_cldf(self.tmp_path)
+        config = selection()
+        config["baseline"][0]["inventory_ids"] = ["999"]
+        with self.assertRaisesRegex(ValueError, "unknown or empty"):
+            analyze(self.tmp_path, config)
 
 
-def test_alternative_requires_every_segment_without_similarity_folding(tmp_path):
-    fixture_cldf(tmp_path)
-    result = analyze(tmp_path, selection())
-    alternatives = result["cumulative_scenarios"][0]["steps"][0][
-        "covering_alternatives"
-    ]
-    assert alternatives[0]["new_at_step"]["consonant"] == ["sʰ", "sː", "ɕ"]
-    assert "θ" not in alternatives[0]["new_at_step"]["consonant"]
+    def test_result_is_deterministic_and_scenario_math_matches_candidate(self):
+        fixture_cldf(self.tmp_path)
+        first = analyze(self.tmp_path, selection())
+        second = analyze(self.tmp_path, selection())
+        assert first == second
+        candidate = first["candidates"][0]
+        step = first["cumulative_scenarios"][0]["steps"][0]
+        assert step["new_at_step"] == candidate["definitely_novel"]
+
+
+    def test_scenario_summary_and_literal_superset_alternatives(self):
+        fixture_cldf(self.tmp_path)
+        config = selection()
+        config["cumulative_scenarios"].append(
+            {"label": "superset", "inventory_ids": ["4"]}
+        )
+        result = analyze(self.tmp_path, config)
+        selected, superset = result["cumulative_scenarios"]
+
+        assert result["schema_version"] == 2
+        assert selected["addition_counts"] == {"consonant": 3, "vowel": 0, "tone": 1}
+        assert superset["addition_counts"] == {"consonant": 3, "vowel": 1, "tone": 1}
+        assert selected["strictly_dominated_by"] == ["superset"]
+        assert superset["strictly_dominated_by"] == []
+        alternatives = selected["steps"][0]["covering_alternatives"]
+        assert [item["inventory_id"] for item in alternatives] == ["4"]
+        assert alternatives[0]["sources"] == ["d"]
+        assert alternatives[0]["url"] == "x"
+        assert alternatives[0]["additional_beyond_selected"] == {
+            "consonant": [], "vowel": ["i"], "tone": []
+        }
+
+
+    def test_alternative_requires_every_segment_without_similarity_folding(self):
+        fixture_cldf(self.tmp_path)
+        result = analyze(self.tmp_path, selection())
+        alternatives = result["cumulative_scenarios"][0]["steps"][0][
+            "covering_alternatives"
+        ]
+        assert alternatives[0]["new_at_step"]["consonant"] == ["sʰ", "sː", "ɕ"]
+        assert "θ" not in alternatives[0]["new_at_step"]["consonant"]
+

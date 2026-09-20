@@ -16,6 +16,11 @@ def import_official(source: Path, output: Path) -> None:
     config = checkpoint.get("model_kwargs", {})
     cond_size, gru_size = int(config.get("cond_size", 128)), int(config.get("gru_size", 256))
     state = checkpoint["state_dict"]
+    write_weights(output, canonical_from_state_dict(state, gru_size), cond_size, gru_size)
+
+
+def canonical_from_state_dict(state, gru_size: int):
+    """Convert the upstream PyTorch tensor names/layout to canonical arrays."""
     array = lambda name: state[name].detach().cpu().numpy().astype(np.float32)
     weights = {
         "conv1.weight": array("conv1.weight").transpose(0, 2, 1),
@@ -34,12 +39,20 @@ def import_official(source: Path, output: Path) -> None:
             bias_ih[2 * gru_size:],
         ))
         weights[f"{prefix}.bhn"] = bias_hh[2 * gru_size:]
-    write_weights(output, weights, cond_size, gru_size)
+    return weights
 
 
 def export_official(source: Path, output: Path) -> None:
     weights, config = read_weights(source)
     gru_size = config["gru_size"]
+    state = state_dict_from_canonical(weights, gru_size)
+    torch.save({"model_args": (), "model_kwargs": {"input_dim": 65, "output_dim": 32,
+                "cond_size": config["cond_size"], "gru_size": gru_size},
+                "state_dict": state}, output)
+
+
+def state_dict_from_canonical(weights, gru_size: int):
+    """Convert canonical arrays to the upstream PyTorch tensor layout."""
     state = {
         "conv1.weight": torch.from_numpy(weights["conv1.weight"].transpose(0, 2, 1).copy()),
         "conv1.bias": torch.from_numpy(weights["conv1.bias"].copy()),
@@ -58,9 +71,7 @@ def export_official(source: Path, output: Path) -> None:
         state[f"{prefix}.weight_hh_l0"] = torch.from_numpy(weights[f"{prefix}.Wh"].copy())
         state[f"{prefix}.bias_ih_l0"] = torch.from_numpy(bias_ih)
         state[f"{prefix}.bias_hh_l0"] = torch.from_numpy(bias_hh)
-    torch.save({"model_args": (), "model_kwargs": {"input_dim": 65, "output_dim": 32,
-                "cond_size": config["cond_size"], "gru_size": gru_size},
-                "state_dict": state}, output)
+    return state
 
 
 def main() -> None:

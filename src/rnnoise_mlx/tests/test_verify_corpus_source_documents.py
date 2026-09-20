@@ -1,8 +1,8 @@
 import hashlib
 import json
 from pathlib import Path
-
-import pytest
+import tempfile
+import unittest
 
 from rnnoise_mlx.tools.verify_corpus_source_documents import sha256, verify
 
@@ -25,17 +25,22 @@ def fixture(root: Path):
     return plan, review
 
 
-def test_verify_checks_documents_plan_and_review(tmp_path: Path):
-    plan, review = fixture(tmp_path / "docs")
-    assert verify(tmp_path / "docs", plan=plan, review=review) == {
-        "stage_id": "stage1",
-        "document_count": 2,
-        "reviewed_resource_count": 1,
-    }
+class VerifyCorpusSourceDocumentsTests(unittest.TestCase):
+    def test_verify_checks_documents_plan_and_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            docs = Path(directory) / "docs"
+            plan, review = fixture(docs)
+            self.assertEqual(verify(docs, plan=plan, review=review), {
+                "stage_id": "stage1",
+                "document_count": 2,
+                "reviewed_resource_count": 1,
+            })
 
 
-def test_verify_rejects_changed_document(tmp_path: Path):
-    plan, review = fixture(tmp_path / "docs")
-    (tmp_path / "docs/LICENSE").write_bytes(b"changed")
-    with pytest.raises(ValueError, match="LICENSE"):
-        verify(tmp_path / "docs", plan=plan, review=review)
+    def test_verify_rejects_changed_document(self):
+        with tempfile.TemporaryDirectory() as directory:
+            docs = Path(directory) / "docs"
+            plan, review = fixture(docs)
+            (docs / "LICENSE").write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "LICENSE"):
+                verify(docs, plan=plan, review=review)

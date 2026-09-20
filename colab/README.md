@@ -14,7 +14,7 @@ Inside the GPU VM, install the project and its CUDA MLX dependencies from
 `pyproject.toml`:
 
 ```sh
-python -m pip install -e /content/rnnoise-mlx
+python -m pip install -e '/content/rnnoise-mlx[cuda]'
 ```
 
 These helpers run an ephemeral Colab GPU runtime from WSL. The training code

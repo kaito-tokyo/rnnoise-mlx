@@ -2,7 +2,8 @@ import io
 import tarfile
 from pathlib import Path
 
-import pytest
+import tempfile
+import unittest
 
 from rnnoise_mlx.tools.select_common_voice_clips import select
 
@@ -29,23 +30,32 @@ def fixture_archive(path: Path) -> None:
         )
 
 
-def test_select_is_deterministic_and_speaker_disjoint(tmp_path: Path):
-    archive = tmp_path / "cv.tar.gz"
-    fixture_archive(archive)
-    first = select(archive, train_target_seconds=4, eval_target_seconds=2, speaker_cap_seconds=2, seed=7)
-    second = select(archive, train_target_seconds=4, eval_target_seconds=2, speaker_cap_seconds=2, seed=7)
-    assert first == second
-    assert first["speaker_disjoint"] is True
-    assert first["selected_seconds"] == {"train": 4.0, "eval": 2.0}
-    assert first["selected_speaker_counts"]["train"] == 3
-    assert set(row["speaker_id"] for row in first["records"] if row["split"] == "train").isdisjoint(
-        row["speaker_id"] for row in first["records"] if row["split"] == "eval"
-    )
-    assert "secret" not in str(first)
+class SelectCommonVoiceClipsTests(unittest.TestCase):
+    def setUp(self):
+        self._temporary_directory = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._temporary_directory.name)
+
+    def tearDown(self):
+        self._temporary_directory.cleanup()
+
+    def test_select_is_deterministic_and_speaker_disjoint(self):
+        archive = self.tmp_path / "cv.tar.gz"
+        fixture_archive(archive)
+        first = select(archive, train_target_seconds=4, eval_target_seconds=2, speaker_cap_seconds=2, seed=7)
+        second = select(archive, train_target_seconds=4, eval_target_seconds=2, speaker_cap_seconds=2, seed=7)
+        assert first == second
+        assert first["speaker_disjoint"] is True
+        assert first["selected_seconds"] == {"train": 4.0, "eval": 2.0}
+        assert first["selected_speaker_counts"]["train"] == 3
+        assert set(row["speaker_id"] for row in first["records"] if row["split"] == "train").isdisjoint(
+            row["speaker_id"] for row in first["records"] if row["split"] == "eval"
+        )
+        assert "secret" not in str(first)
 
 
-def test_select_rejects_insufficient_capacity(tmp_path: Path):
-    archive = tmp_path / "cv.tar.gz"
-    fixture_archive(archive)
-    with pytest.raises(ValueError, match="train capacity is insufficient"):
-        select(archive, train_target_seconds=20, eval_target_seconds=2, speaker_cap_seconds=2, seed=7)
+    def test_select_rejects_insufficient_capacity(self):
+        archive = self.tmp_path / "cv.tar.gz"
+        fixture_archive(archive)
+        with self.assertRaisesRegex(ValueError, "train capacity is insufficient"):
+            select(archive, train_target_seconds=20, eval_target_seconds=2, speaker_cap_seconds=2, seed=7)
+

@@ -78,7 +78,6 @@ shared store only after their sizes and SHA-256 values match.
 ## Colab training
 
 Copy `train.f32`, `eval.f32`, and their manifests to `/content` before running
-MLX. Start the existing Colab helper from WSL so the reverse MLflow tunnel is
 active:
 
 ```sh
@@ -94,22 +93,16 @@ python3 -m rnnoise_mlx.training.train /content/train.f32 \
   --batch-size 8 --sequence-length 2000 \
   --segmented-tbptt-length 500 --segmented-tbptt-state carry \
   --max-updates 10000 --checkpoint-every 500 --seed 141 \
-  --mlflow-tracking-uri http://localhost:5000 \
-  --mlflow-experiment rnnoise-speexdsp-common-voice \
-  --mlflow-run-name speexdsp-ja-minus12-final-90h-10k \
   --provenance-artifact /content/train.manifest.json \
   --provenance-artifact /content/eval.manifest.json
 ```
 
-Upload or retain each complete checkpoint through MLflow. If the runtime ends,
 download the latest committed checkpoint, copy it to `/content`, and resume
-with the same MLflow run ID. Keep Alive extensions are not part of this
 workflow.
 
 ## Acceptance
 
 The experiment is successful when the full preprocessing and feature pipeline
 completes, 10,000 updates finish or resume to completion, checkpoints exist at
-500-update boundaries, and the MLflow run contains the data, SpeexDSP, feature,
 and training provenance. This is a construction-feasibility experiment, not a
 parameter benchmark.

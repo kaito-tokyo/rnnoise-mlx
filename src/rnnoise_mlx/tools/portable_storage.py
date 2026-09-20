@@ -36,8 +36,6 @@ DIRECTORIES = (
     "experiments/active",
     "experiments/stopped",
     "experiments/scratch",
-    "mlflow/artifacts",
-    "mlflow/logs",
     "runtime",
     "references/models",
     "references/evaluation-sets",
@@ -184,196 +182,6 @@ def initialize(root: Path, expected_uuid: str = DEFAULT_UUID) -> dict[str, objec
     if not datasets.exists():
         _json_write(datasets, {"format_version": FORMAT_VERSION, "datasets": []})
     return config
-
-
-def _pid_path(root: Path) -> Path:
-    return root / "mlflow" / "mlflow.pid"
-
-
-def _running_pid(root: Path) -> int | None:
-    path = _pid_path(root)
-    if not path.is_file():
-        return None
-    try:
-        metadata = json.loads(path.read_text())
-        if metadata == {"starting": True}:
-            raise RuntimeError(f"MLflow startup state remains: {path}")
-        pid = int(metadata["pid"])
-        expected_database = str((root / "mlflow" / "mlflow.db").resolve())
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        path.unlink(missing_ok=True)
-        return None
-    try:
-        result = subprocess.run(
-            ["/bin/ps", "-ww", "-p", str(pid), "-o", "command="],
-            check=False,
-            text=True,
-            capture_output=True,
-        )
-    except OSError:
-        result = None
-    command = result.stdout.strip() if result is not None and result.returncode == 0 else ""
-    if (
-        "-m mlflow server" not in command
-        or f"sqlite:///{expected_database}" not in command
-    ):
-        path.unlink(missing_ok=True)
-        return None
-    return pid
-
-
-def _training_lock_is_live(metadata: object) -> bool:
-    try:
-        if not isinstance(metadata, dict) or metadata["hostname"] != socket.gethostname():
-            return False
-        pid = int(metadata["pid"])
-        result = subprocess.run(
-            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
-            check=False,
-            text=True,
-            capture_output=True,
-        )
-        return result.returncode == 0 and result.stdout.strip() == metadata["started_at"]
-    except (KeyError, TypeError, ValueError, OSError):
-        return False
-
-
-def _remove_pid_if_owned(root: Path, pid: int | None) -> None:
-    path = _pid_path(root)
-    try:
-        metadata = json.loads(path.read_text())
-        if metadata == {"starting": True} or (pid is not None and int(metadata["pid"]) == pid):
-            path.unlink(missing_ok=True)
-    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-        pass
-
-
-def start_mlflow(root: Path, port: int = 5000, timeout: float = 30.0) -> int:
-    load_volume_config(root)
-    startup_lock = coordination_lock_path(root, "mlflow-start")
-    with startup_lock.open("a+") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        return _start_mlflow_locked(root, port, timeout)
-
-
-def _start_mlflow_locked(root: Path, port: int, timeout: float) -> int:
-    running = _running_pid(root)
-    if running is not None:
-        raise RuntimeError(f"MLflow is already running with PID {running}")
-    database = root / "mlflow" / "mlflow.db"
-    artifacts = root / "mlflow" / "artifacts"
-    log_path = root / "mlflow" / "logs" / "server.log"
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            probe.bind(("127.0.0.1", port))
-        except OSError as error:
-            raise RuntimeError(f"MLflow port is already in use: {port}") from error
-    log = log_path.open("ab", buffering=0)
-    command = [
-        sys.executable,
-        "-m",
-        "mlflow",
-        "server",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--workers",
-        "1",
-        "--backend-store-uri",
-        f"sqlite:///{database}",
-        "--artifacts-destination",
-        artifacts.as_uri(),
-        "--serve-artifacts",
-    ]
-    process = None
-    try:
-        _json_write(_pid_path(root), {"starting": True})
-        process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-        _json_write(_pid_path(root), {"pid": process.pid, "database": str(database.resolve())})
-        deadline = time.monotonic() + timeout
-        health = f"http://127.0.0.1:{port}/health"
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise RuntimeError(f"MLflow exited with status {process.returncode}; see {log_path}")
-            try:
-                with urlopen(health, timeout=1) as response:
-                    if response.status == 200:
-                        return process.pid
-            except OSError:
-                time.sleep(0.25)
-        raise TimeoutError(f"MLflow did not become healthy: {health}")
-    except BaseException:
-        if process is not None and process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
-        _remove_pid_if_owned(root, process.pid if process is not None else None)
-        raise
-    finally:
-        log.close()
-
-
-def sqlite_integrity(database: Path) -> str:
-    if not database.exists():
-        return "not-created"
-    connection = sqlite3.connect(database)
-    try:
-        checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-        if checkpoint is not None and checkpoint[0] != 0:
-            raise RuntimeError("SQLite WAL checkpoint is busy")
-        result = connection.execute("PRAGMA integrity_check").fetchone()
-    finally:
-        connection.close()
-    status = str(result[0]) if result else "missing-result"
-    if status != "ok":
-        raise RuntimeError(f"SQLite integrity check failed: {status}")
-    return status
-
-
-def stop_mlflow(root: Path, timeout: float = 30.0) -> str:
-    load_volume_config(root)
-    startup_lock = coordination_lock_path(root, "mlflow-start")
-    startup_lock.parent.mkdir(parents=True, exist_ok=True)
-    with startup_lock.open("a+") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        return _stop_mlflow_locked(root, timeout)
-
-
-def _stop_mlflow_locked(root: Path, timeout: float) -> str:
-    pid = _running_pid(root)
-    if pid is not None:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                waited_pid, _ = os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                waited_pid = 0
-            if waited_pid == pid:
-                break
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.25)
-        else:
-            raise TimeoutError(f"MLflow PID {pid} did not stop")
-    _pid_path(root).unlink(missing_ok=True)
-    return sqlite_integrity(root / "mlflow" / "mlflow.db")
 
 
 def _tree_summary(path: Path, include_hashes: bool) -> dict[str, object]:
@@ -563,38 +371,27 @@ def _is_temporary_path(path: Path) -> bool:
 
 def eject_check(root: Path) -> dict[str, object]:
     load_volume_config(root)
-    startup_lock = coordination_lock_path(root, "mlflow-start")
-    startup_lock.parent.mkdir(parents=True, exist_ok=True)
-    with startup_lock.open("a+") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        training_guard = coordination_lock_path(root, "training")
-        with training_guard.open("a+") as training_stream:
-            fcntl.flock(training_stream, fcntl.LOCK_EX)
-            with volume_operation_guard(root):
-                return _eject_check_locked(root, root_training_guard_held=True)
+    training_guard = coordination_lock_path(root, "training")
+    with training_guard.open("a+") as training_stream:
+        fcntl.flock(training_stream, fcntl.LOCK_EX)
+        with volume_operation_guard(root):
+            return _eject_check_locked(root, root_training_guard_held=True)
 
 
 def eject_volume(root: Path) -> dict[str, object]:
     """Verify and eject while excluding new portable-volume operations."""
     load_volume_config(root)
-    startup_lock = coordination_lock_path(root, "mlflow-start")
-    startup_lock.parent.mkdir(parents=True, exist_ok=True)
-    with startup_lock.open("a+") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        training_guard = coordination_lock_path(root, "training")
-        with training_guard.open("a+") as training_stream:
-            fcntl.flock(training_stream, fcntl.LOCK_EX)
-            with volume_operation_guard(root):
-                result = _eject_check_locked(root, root_training_guard_held=True)
-                subprocess.run(["/usr/sbin/diskutil", "eject", str(root)], check=True)
-                return result
+    training_guard = coordination_lock_path(root, "training")
+    with training_guard.open("a+") as training_stream:
+        fcntl.flock(training_stream, fcntl.LOCK_EX)
+        with volume_operation_guard(root):
+            result = _eject_check_locked(root, root_training_guard_held=True)
+            subprocess.run(["/usr/sbin/diskutil", "eject", str(root)], check=True)
+            return result
 
 
 def _eject_check_locked(root: Path, *, root_training_guard_held: bool = False) -> dict[str, object]:
     config = load_volume_config(root)
-    running = _running_pid(root)
-    if running is not None:
-        raise RuntimeError(f"MLflow is still running with PID {running}")
     partials = [
         str(path)
         for path in root.rglob("*")
@@ -649,12 +446,9 @@ def _eject_check_locked(root: Path, *, root_training_guard_held: bool = False) -
         if corrupt:
             raise RuntimeError(f"active checkpoint differs from manifest: {latest}: {corrupt}")
         active_checkpoints.append(str(latest))
-    database_status = sqlite_integrity(root / "mlflow" / "mlflow.db")
     free_bytes = shutil.disk_usage(root).free
     return {
         "volume_uuid": config["volume_uuid"],
-        "mlflow": "stopped",
-        "sqlite_integrity": database_status,
         "free_bytes": free_bytes,
         "minimum_free_bytes_met": free_bytes >= int(config["minimum_free_bytes"]),
         "active_checkpoints": active_checkpoints,
@@ -700,9 +494,6 @@ def main() -> None:
     subparsers.add_parser("init")
     subparsers.add_parser("machine-id")
     subparsers.add_parser("preflight")
-    start = subparsers.add_parser("mlflow-start")
-    start.add_argument("--port", type=int, default=5000)
-    subparsers.add_parser("mlflow-stop")
     verify = subparsers.add_parser("verify-copy")
     verify.add_argument("source", type=Path)
     verify.add_argument("destination", type=Path)
@@ -729,10 +520,6 @@ def main() -> None:
         result = initialize(args.root)
     elif args.command == "preflight":
         result = load_volume_config(args.root)
-    elif args.command == "mlflow-start":
-        result = {"pid": start_mlflow(args.root, args.port), "tracking_uri": f"http://127.0.0.1:{args.port}"}
-    elif args.command == "mlflow-stop":
-        result = {"sqlite_integrity": stop_mlflow(args.root)}
     elif args.command == "verify-copy":
         result = verify_copy(args.source, args.destination, args.record)
     elif args.command == "copy-tree":

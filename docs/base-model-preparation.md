@@ -138,8 +138,6 @@ generation time. 10,000 sequences require about 7.84 GB; 200,000 require about
   --batch-size 8 --sequence-length 2000 \
   --segmented-tbptt-length 100 --segmented-tbptt-state carry \
   --max-updates 320 --seed 141 \
-  --mlflow-tracking-uri "$MLFLOW_TRACKING_URI" \
-  --mlflow-experiment "$MLFLOW_EXPERIMENT" --mlflow-run-name base-smoke
 ```
 
 Verify 320 completed updates, finite losses, improved evaluation loss, and
@@ -151,7 +149,6 @@ tests.
 Feature generation writes `train.manifest.json` and `eval.manifest.json` next
 to the bulk `.f32` files. Training uploads these manifests, `run-config.json`,
 `model-config.json`, `training.json`, the final SafeTensors model, and every
-complete resumable checkpoint to MLflow. Bulk feature and corpus files remain
 in the shared dataset store. Pass additional small selection or mix manifests
 with repeated `--provenance-artifact PATH` options; files larger than 16 MiB
 are rejected to prevent accidental corpus uploads.

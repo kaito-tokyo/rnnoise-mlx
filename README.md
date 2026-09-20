@@ -19,6 +19,79 @@ artifacts.
 - `models/`: model contract between MLX and BNNS
 - `docs/`: reproducibility, evaluation, and licensing documentation
 
+## Installation
+
+MLX is the default training dependency for Mac:
+
+```sh
+python -m pip install -e .
+```
+
+On Linux and WSL, the default installation uses the CPU MLX backend, so the
+unit tests do not require a GPU. Install the optional CUDA extra only when
+running a CUDA training job:
+
+```sh
+python -m pip install -e '.[cuda]'
+```
+
+Add PyTorch with the optional `torch` extra:
+
+```sh
+python -m pip install -e '.[torch]'
+```
+
+Select the PyTorch trainer explicitly with
+`python -m rnnoise_mlx.training_pytorch.train`. The existing `conversion` extra
+includes PyTorch and Core ML conversion dependencies. For MLX CUDA experiments
+on Linux, use `.[cuda]`.
+
+### Initial training with PyTorch
+
+```sh
+python -m rnnoise_mlx.training_pytorch.train data/features/train.npy runs/torch-smoke \
+  --device cuda --batch-size 4 --sequence-length 2000 \
+  --segmented-tbptt-length 250 --max-updates 3
+```
+
+The PyTorch backend uses a sequence model with native `torch.nn.GRU` and a
+separate TBPTT loop. It accumulates gradients across chunks and performs one
+Adam update per complete sequence batch. Its default dimensions are the shared
+65/128/384/32 profile. It does not import MLX or require `torch.compile`.
+
+`RNNoise(ModelConfig)` accepts any batch size and sequence length with at least
+five input frames. `forward(features, state=None)` returns gain, VAD, and three
+GRU states in native `(1, batch, hidden)` layout. Valid convolutions reduce the
+sequence length by four. The model has no training configuration or streaming
+inference branch; it does not detach recurrent state.
+
+`PyTorchTrainingLoop(model, optimizer, TrainConfig)` owns input padding, chunk
+length, loss, state truncation, gradient averaging, and optimizer updates.
+`run_update(features, target_gain, target_vad, state=...)` obtains its TBPTT
+length from the shared `TrainConfig`, without a duplicate method argument.
+Both configs are the same classes used by MLX, from
+`rnnoise_mlx.training_tools.model_config`.
+
+Each run needs a new output directory. `model.safetensors` uses the existing
+canonical MLX/C weight format. Periodic `update-NNNNNNNN/` directories contain
+these weights and a PyTorch `checkpoint.pt` with optimizer and restart state.
+Use `--init-weights model.safetensors` for a new fine-tuning run, or
+`--resume-from runs/previous/update-00000032/checkpoint.pt` for continuation
+into a new output directory. On resume, `--max-updates` is the total update
+limit, including previous updates; keep the original training configuration
+and feature file. Optional `--feature-identity` records the existing preflight
+identity; this argument does not perform preflight itself. Earlier PyTorch
+checkpoint format 1 is migrated on load; new checkpoints use format 2 with
+unwrapped model keys and native GRU state shapes. Canonical SafeTensors are
+unchanged.
+
+As in `colab/profile_train.py`, GRU state is detached at each chunk boundary
+and carried between updates by default; convolution history is reconstructed
+from four overlapping input frames and reset at the start of each update.
+Use `--no-carry-between-updates` for independent batches. PyTorch initialization
+and its separate GRU biases mean training trajectories need not be identical
+to MLX, even though the converted forward computation and objective match.
+
 ## Training
 
 ```sh
@@ -49,10 +122,11 @@ python -m rnnoise_mlx.tools.convert_features_to_npy \
   --sequence-length 2000
 ```
 
-Copy the resulting `.npy` files and their `.manifest.json` files to Google
-Drive. Copy them to the Colab local disk before training; do not train directly
-from the mounted Drive filesystem. `FeatureDataset` accepts both the legacy
-raw `.f32` format and the sequence-shaped `.npy` format.
+Copy the resulting uncompressed `.npy` files and their `.manifest.json` files
+to the Colab local disk before training; do not train directly from a mounted
+cloud filesystem. `FeatureDataset` accepts both the legacy raw `.f32` format
+and the sequence-shaped `.npy` format. Compressed feature archives are not
+accepted by the trainer; decompress them before starting a run.
 
 Use a TBPTT segment length of 100 for rapid corpus and quality screening. Loss
 is a failure-detection signal, not a substitute for listening tests. Promote
@@ -213,7 +287,7 @@ Store SafeTensors models, evaluation JSON, and generated WAV files there.
 ## Tests and builds
 
 ```sh
-.venv/bin/python -m pytest -q
+.venv/bin/python -m unittest discover -s src/rnnoise_mlx/tests -p "test_*.py"
 swift test
 
 cmake -S . -B .build/cmake
