@@ -47,7 +47,7 @@ def test_verify_rejects_corruption(tmp_path):
     source, source_manifest = source_feature(tmp_path)
     destination = tmp_path / "v1" / "train" / "generation-000"
     publish(source, source_manifest, destination, 1)
-    with (destination / "features.f32").open("r+b") as output:
+    with (destination / "features.npy").open("r+b") as output:
         output.write(b"x")
     try:
         verify_generation(destination)

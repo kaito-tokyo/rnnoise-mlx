@@ -77,7 +77,7 @@ shared store only after their sizes and SHA-256 values match.
 
 ## Colab training
 
-Copy `train.f32`, `eval.f32`, and their manifests to `/content` before running
+Copy `train.npy`, `eval.npy`, and their manifests to `/content` before running
 active:
 
 ```sh
@@ -87,9 +87,9 @@ active:
 Run training in the connected Colab shell:
 
 ```sh
-python3 -m rnnoise_mlx.training.train /content/train.f32 \
+python3 -m rnnoise_mlx.training.train /content/train.npy \
   /content/runs/speexdsp-ja-minus12-final-90h-10k \
-  --eval-features /content/eval.f32 \
+  --eval-features /content/eval.npy \
   --batch-size 8 --sequence-length 2000 \
   --segmented-tbptt-length 500 --segmented-tbptt-state carry \
   --max-updates 10000 --checkpoint-every 500 --seed 141 \

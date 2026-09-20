@@ -9,6 +9,8 @@ from pathlib import Path
 import subprocess
 import time
 
+import numpy as np
+
 
 BYTES_PER_SEQUENCE = 2000 * 98 * 4
 RNG_ALGORITHM = "splitmix64-domain-v1"
@@ -52,7 +54,8 @@ def generate(
     speech_offset_start: int = 0,
     foreground_probability_denominator: int = 8,
 ) -> None:
-    destination = output / f"{split}.f32"
+    destination = output / f"{split}.npy"
+    raw_destination = output / f".{split}.f32.tmp"
     options = []
     if speech_offsets is not None:
         options = [
@@ -75,7 +78,7 @@ def generate(
         str(prepared / f"{split}_speech.pcm"),
         str(prepared / f"{split}_background.pcm"),
         str(prepared / f"{split}_foreground.pcm"),
-        str(destination),
+        str(raw_destination),
         str(count),
     ]
     started = time.monotonic()
@@ -88,8 +91,8 @@ def generate(
         except subprocess.TimeoutExpired:
             elapsed = time.monotonic() - started
             completed = min(
-                destination.stat().st_size // BYTES_PER_SEQUENCE
-                if destination.exists()
+                raw_destination.stat().st_size // BYTES_PER_SEQUENCE
+                if raw_destination.exists()
                 else 0,
                 count,
             )
@@ -104,12 +107,19 @@ def generate(
             )
     if return_code:
         raise subprocess.CalledProcessError(return_code, command)
-    actual = destination.stat().st_size
+    actual_raw = raw_destination.stat().st_size
     expected = count * BYTES_PER_SEQUENCE
-    if actual != expected:
+    if actual_raw != expected:
         raise SystemExit(
-            f"unexpected size for {destination}: {actual}, expected {expected}"
+            f"unexpected size for {raw_destination}: {actual_raw}, expected {expected}"
         )
+    raw = np.memmap(raw_destination, dtype="<f4", mode="r", shape=(count, 2000, 98))
+    array = np.lib.format.open_memmap(destination, mode="w+", dtype="<f4", shape=raw.shape)
+    array[:] = raw
+    array.flush()
+    del array, raw
+    raw_destination.unlink()
+    actual = destination.stat().st_size
     input_paths = {
             "speech": prepared / f"{split}_speech.pcm",
             "background": prepared / f"{split}_background.pcm",

@@ -43,7 +43,7 @@ def _generation_metadata(source_manifest: dict) -> dict:
 
 def verify_generation(path: Path) -> dict:
     manifest = json.loads((path / "manifest.json").read_text())
-    feature = path / "features.f32"
+    feature = path / "features.npy"
     required = {
         "format_version": 1,
         "kind": "rnnoise-mlx-feature-generation",
@@ -54,7 +54,7 @@ def verify_generation(path: Path) -> dict:
     mismatches = [key for key, value in required.items() if manifest.get(key) != value]
     if mismatches:
         raise ValueError(f"feature manifest fields differ: {', '.join(mismatches)}")
-    if manifest.get("output", {}).get("filename") != "features.f32":
+    if manifest.get("output", {}).get("filename") != "features.npy":
         raise ValueError("feature manifest output filename differs")
     source_manifest = manifest.get("source_manifest")
     if not isinstance(source_manifest, dict) or manifest.get(
@@ -84,7 +84,7 @@ def verify_generation(path: Path) -> dict:
     )
     if not semantic_matches:
         raise ValueError("embedded source manifest does not match feature generation")
-    sidecar = (path / "features.f32.sha256").read_text().split()[0]
+    sidecar = (path / "features.npy.sha256").read_text().split()[0]
     if sidecar != digest:
         raise ValueError(f"checksum sidecar differs: {feature}")
     return manifest
@@ -160,8 +160,8 @@ def publish(
                 _write_index(destination.parents[1])
                 return destination
             temporary.mkdir()
-            shutil.copyfile(source, temporary / "features.f32")
-            digest = sha256(temporary / "features.f32")
+            shutil.copyfile(source, temporary / "features.npy")
+            digest = sha256(temporary / "features.npy")
             if digest != source_digest:
                 raise ValueError("source feature changed while it was being published")
             manifest = {
@@ -172,13 +172,13 @@ def publish(
                 "frames_per_sequence": 2000,
                 "values_per_frame": 98,
                 "rng_algorithm": RNG_ALGORITHM,
-                "output": {"filename": "features.f32", "bytes": source.stat().st_size, "sha256": digest},
+                "output": {"filename": "features.npy", "bytes": source.stat().st_size, "sha256": digest},
                 "generation": metadata,
                 "source_manifest_sha256": generated_manifest_digest,
                 "source_manifest": generated_manifest,
             }
             (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-            (temporary / "features.f32.sha256").write_text(f"{digest}  features.f32\n")
+            (temporary / "features.npy.sha256").write_text(f"{digest}  features.npy\n")
             verify_generation(temporary)
             os.replace(temporary, destination)
             _write_index(destination.parents[1])

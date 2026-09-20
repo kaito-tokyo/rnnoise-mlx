@@ -133,8 +133,8 @@ generation time. 10,000 sequences require about 7.84 GB; 200,000 require about
 ## 5. Smoke training
 
 ```sh
-.venv/bin/python -m rnnoise_mlx.training.train data/features/train.f32 runs/base-smoke \
-  --eval-features data/features/eval.f32 \
+.venv/bin/python -m rnnoise_mlx.training.train data/features/train.npy runs/base-smoke \
+  --eval-features data/features/eval.npy \
   --batch-size 8 --sequence-length 2000 \
   --segmented-tbptt-length 100 --segmented-tbptt-state carry \
   --max-updates 320 --seed 141 \
@@ -147,7 +147,7 @@ segment length 500 and at least 10,000 updates, then run fixed-WAV listening
 tests.
 
 Feature generation writes `train.manifest.json` and `eval.manifest.json` next
-to the bulk `.f32` files. Training uploads these manifests, `run-config.json`,
+to the bulk `.npy` files. Training uploads these manifests, `run-config.json`,
 `model-config.json`, `training.json`, the final SafeTensors model, and every
 in the shared dataset store. Pass additional small selection or mix manifests
 with repeated `--provenance-artifact PATH` options; files larger than 16 MiB
@@ -163,7 +163,7 @@ parallel or resumed generation without changing any sequence bytes.
 Publish completed files into the immutable shared store only after generation:
 
 ```sh
-python -m rnnoise_mlx.tools.feature_store publish train.f32 \
+python -m rnnoise_mlx.tools.feature_store publish train.npy \
   /Users/umireon/Datasets/rnnoise-mlx-features/v1/train/generation-000 \
   --sequence-count 10000
 python -m rnnoise_mlx.tools.feature_store verify \

@@ -63,8 +63,8 @@ Train with immutable 1,000-update generations:
 
 ```sh
 python -m rnnoise_mlx.training.train \
-  data/cjk-cleaner/features/train.f32 runs/cjk-cleaner-10k \
-  --eval-features data/cjk-cleaner/features/eval.f32 \
+  data/cjk-cleaner/features/train.npy runs/cjk-cleaner-10k \
+  --eval-features data/cjk-cleaner/features/eval.npy \
   --batch-size 8 --sequence-length 2000 \
   --segmented-tbptt-length 250 --segmented-tbptt-state carry \
   --max-updates 10000 --checkpoint-every 1000 --seed 141 \

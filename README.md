@@ -97,16 +97,16 @@ to MLX, even though the converted forward computation and objective match.
 ```sh
 /opt/homebrew/opt/python@3.14/bin/python3.14 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m rnnoise_mlx.training.train data/features/train.f32 runs/smoke \
+.venv/bin/python -m rnnoise_mlx.training.train data/features/train.npy runs/smoke \
   --batch-size 8 \
   --sequence-length 2000 \
   --max-updates 320 \
   --segmented-tbptt-length 100 \
   --segmented-tbptt-state carry \
-  --eval-features data/features/eval.f32
+  --eval-features data/features/eval.npy
 ```
 
-Each `features.f32` frame matches upstream `dump_features`: 98 float32 values
+Each generated `.npy` sequence matches upstream `dump_features`: 98 float32 values
 containing 65 input features, 32 target gains, and one VAD target.
 
 For repeated training runs, convert the raw feature files once on the Mac mini
@@ -114,38 +114,7 @@ to sequence-shaped NumPy files. The converter uses a bounded memory map and does
 not load the complete feature corpus into RAM:
 
 ```sh
-python -m rnnoise_mlx.tools.convert_features_to_npy \
-  data/features/train.f32 data/features/train.npy \
-  --sequence-length 2000
-python -m rnnoise_mlx.tools.convert_features_to_npy \
-  data/features/eval.f32 data/features/eval.npy \
-  --sequence-length 2000
-```
-
-Copy the resulting uncompressed `.npy` files and their `.manifest.json` files
-to the Colab local disk before training; do not train directly from a mounted
-cloud filesystem. `FeatureDataset` accepts both the legacy raw `.f32` format
-and the sequence-shaped `.npy` format. Compressed feature archives are not
-accepted by the trainer; decompress them before starting a run.
-
-Use a TBPTT segment length of 100 for rapid corpus and quality screening. Loss
-is a failure-detection signal, not a substitute for listening tests. Promote
-promising candidates to segment length 500 with continuous Conv/GRU state,
-`stop_gradient` at segment boundaries, and one optimizer update after all 2,000
-frames.
-
-```sh
-.venv/bin/python -m rnnoise_mlx.training.train data/features/train.f32 runs/promoted-500 \
-  --batch-size 8 \
-  --sequence-length 2000 \
-  --segmented-tbptt-length 500 \
-  --segmented-tbptt-state carry \
-  --eval-features data/features/eval.f32 \
-  --max-updates 320
-```
-
-The current corpus-cleaning and promoted-training parameters are documented in
-[the CJK two-stage procedure](docs/cjk-two-stage-training.md).
+The feature generator writes sequence-shaped, uncompressed `.npy` files directly. Copy the resulting `.npy` files and their `.manifest.json` files to the cloud filesystem. `FeatureDataset` memory-maps these files and yields only selected minibatches.
 
 ### Training on Notebook
 
@@ -157,7 +126,7 @@ cell must then pass those already-computed identities to `train()`:
 from rnnoise_mlx.training import TrainConfig, preflight_feature_identities, train
 
 config = TrainConfig(
-    features="/content/train.f32",
+    features="/content/train.npy",
     output="/content/runs/notebook-run",
     eval_features=None,
     batch_size=2,
@@ -242,9 +211,9 @@ def on_progress(event):
         print(f"checkpoint: {event.path}")
 
 config = TrainConfig(
-    features="data/features/train.f32",
+    features="data/features/train.npy",
     output="runs/notebook-run",
-    eval_features="data/features/eval.f32",
+    eval_features="data/features/eval.npy",
     max_updates=320,
     segmented_tbptt_length=500,
     segmented_tbptt_state="carry",
