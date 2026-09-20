@@ -66,6 +66,31 @@ def train_update(model, optimizer, train_config, features, target_gain, target_v
     return total_loss, state
 
 
+def train_update_full(model, optimizer, train_config, features, target_gain, target_vad, state=None):
+    """Run one update with full-sequence backpropagation and no TBPTT splits."""
+    batch = train_config.batch_size
+    if batch <= 0 or train_config.gamma <= 0:
+        raise ValueError("batch_size and gamma must be positive")
+    if features.ndim != 3 or features.shape[0] != batch or features.shape[2] != model.model_config.input_dim:
+        raise ValueError("features must have shape (batch_size, frames, input_dim)")
+    frames = features.shape[1]
+    if frames == 0:
+        raise ValueError("frames must be positive")
+    if target_gain.shape != (batch, frames, model.model_config.output_dim) or target_vad.shape != (batch, frames, 1):
+        raise ValueError("target shapes must match the feature batch and frame count")
+    state = initial_state(model, train_config) if state is None else tuple(s.detach() for s in state)
+    padded = torch.cat((features.new_zeros(batch, 4, features.shape[2]), features), dim=1)
+    model.train()
+    optimizer.zero_grad(set_to_none=True)
+    gain, vad, state = model(padded, state)
+    loss = rnnoise_loss(gain, vad, target_gain, target_vad, gamma=train_config.gamma)
+    loss.backward()
+    optimizer.step()
+    if features.device.type == "cuda":
+        torch.cuda.synchronize(features.device)
+    return loss.detach(), tuple(s.detach() for s in state)
+
+
 class RNNoiseTrainer:
     """Small convenience wrapper around the functional training API."""
     def __init__(self, model, optimizer, train_config):
