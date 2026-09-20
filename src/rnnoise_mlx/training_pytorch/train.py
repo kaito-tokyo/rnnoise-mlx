@@ -30,83 +30,50 @@ def rnnoise_loss(predicted_gain, predicted_vad, target_gain, target_vad, *, gamm
     return gain_loss + 0.001 * vad_loss
 
 
+def initial_state(model: RNNoise, train_config: TrainConfig) -> GRUState:
+    parameter = next(model.parameters())
+    return tuple(
+        parameter.new_zeros(1, train_config.batch_size, model.model_config.gru_size)
+        for _ in range(3)
+    )
+
+
+def train_update(model, optimizer, train_config, features, target_gain, target_vad, state=None):
+    batch = train_config.batch_size
+    segment_length = train_config.tbptt_length
+    if batch <= 0 or segment_length <= 0 or train_config.gamma <= 0:
+        raise ValueError("batch_size, tbptt_length, and gamma must be positive")
+    if features.ndim != 3 or features.shape[0] != batch or features.shape[2] != model.model_config.input_dim:
+        raise ValueError("features must have shape (batch_size, frames, input_dim)")
+    frames = features.shape[1]
+    if frames == 0 or frames % segment_length:
+        raise ValueError("frames must be a positive multiple of the configured TBPTT length")
+    if target_gain.shape != (batch, frames, model.model_config.output_dim) or target_vad.shape != (batch, frames, 1):
+        raise ValueError("target shapes must match the feature batch and frame count")
+    state = initial_state(model, train_config) if state is None else tuple(s.detach() for s in state)
+    padded = torch.cat((features.new_zeros(batch, 4, features.shape[2]), features), dim=1)
+    model.train(); optimizer.zero_grad(set_to_none=True); total_loss = features.new_zeros(())
+    for start in range(0, frames, segment_length):
+        end = start + segment_length
+        gain, vad, state = model(padded[:, start:end + 4, :], state)
+        loss = rnnoise_loss(gain, vad, target_gain[:, start:end], target_vad[:, start:end], gamma=train_config.gamma)
+        weighted = loss * (segment_length / frames)
+        weighted.backward(); total_loss = total_loss + weighted.detach()
+        state = tuple(s.detach() for s in state)
+    optimizer.step()
+    if features.device.type == "cuda":
+        torch.cuda.synchronize(features.device)
+    return total_loss, state
+
+
 class RNNoiseTrainer:
-    def __init__(
-        self,
-        model: RNNoise,
-        optimizer: torch.optim.Optimizer,
-        train_config: TrainConfig,
-    ):
-        if train_config.batch_size <= 0 or train_config.tbptt_length <= 0:
-            raise ValueError("batch_size and tbptt_length must be positive")
-        if train_config.gamma <= 0:
-            raise ValueError("gamma must be positive")
-        self.model = model
-        self.optimizer = optimizer
-        self.model_config = model.model_config
-        self.train_config = train_config
-
+    """Small convenience wrapper around the functional training API."""
+    def __init__(self, model, optimizer, train_config):
+        self.model, self.optimizer, self.train_config = model, optimizer, train_config
     def initial_state(self):
-        parameter = next(self.model.parameters())
-        return tuple(
-            parameter.new_zeros(
-                1, self.train_config.batch_size, self.model_config.gru_size
-            )
-            for _ in range(3)
-        )
-
-    def run_update(
-        self, features, target_gain, target_vad, *, state: GRUState | None = None
-    ):
-        batch = self.train_config.batch_size
-        segment_length = self.train_config.tbptt_length
-        if (
-            features.ndim != 3
-            or features.shape[0] != batch
-            or features.shape[2] != self.model_config.input_dim
-        ):
-            raise ValueError("features must have shape (batch_size, frames, input_dim)")
-        frames = features.shape[1]
-        if frames == 0 or frames % segment_length:
-            raise ValueError(
-                "frames must be a positive multiple of the configured TBPTT length"
-            )
-        if target_gain.shape != (
-            batch,
-            frames,
-            self.model_config.output_dim,
-        ) or target_vad.shape != (batch, frames, 1):
-            raise ValueError(
-                "target shapes must match the feature batch and frame count"
-            )
-        state = (
-            self.initial_state() if state is None else tuple(s.detach() for s in state)
-        )
-        padded_features = torch.cat(
-            (features.new_zeros(batch, 4, features.shape[2]), features), dim=1
-        )
-        self.model.train()
-        self.optimizer.zero_grad(set_to_none=True)
-        total_loss = features.new_zeros(())
-        for start in range(0, frames, segment_length):
-            end = start + segment_length
-            gain, vad, state = self.model(padded_features[:, start : end + 4, :], state)
-            loss = rnnoise_loss(
-                gain,
-                vad,
-                target_gain[:, start:end, :],
-                target_vad[:, start:end, :],
-                gamma=self.train_config.gamma,
-            )
-            # Backward frees each chunk graph; GRU carry is truncated at its boundary.
-            weighted_loss = loss * (segment_length / frames)
-            weighted_loss.backward()
-            total_loss += weighted_loss.detach()
-            state = tuple(s.detach() for s in state)
-        self.optimizer.step()
-        if features.device.type == "cuda":
-            torch.cuda.synchronize(features.device)
-        return total_loss, state
+        return initial_state(self.model, self.train_config)
+    def run_update(self, features, target_gain, target_vad, *, state=None):
+        return train_update(self.model, self.optimizer, self.train_config, features, target_gain, target_vad, state)
 
 
 

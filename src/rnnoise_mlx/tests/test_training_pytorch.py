@@ -24,6 +24,8 @@ from rnnoise_mlx.tools.rnnoise_weights import read_weights
 from rnnoise_mlx.training_pytorch import (
     ModelConfig,
     RNNoiseTrainer,
+    initial_state,
+    train_update,
     RNNoise,
     TrainConfig,
 )
@@ -113,7 +115,7 @@ class PyTorchTrainingTests(unittest.TestCase):
         initial = tuple(s.requires_grad_() for s in loop.initial_state())
         calls = []
         optimizer.register_step_post_hook(lambda *args: calls.append(1))
-        loss, state = loop.run_update(*batch, state=initial)
+        loss, state = train_update(model, optimizer, settings, *batch, state=initial)
 
         padded = torch.cat((batch[0].new_zeros(2, 4, 65), batch[0]), dim=1)
         first_gain, first_vad, carry = reference(
