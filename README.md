@@ -65,7 +65,7 @@ GRU states in native `(1, batch, hidden)` layout. Valid convolutions reduce the
 sequence length by four. The model has no training configuration or streaming
 inference branch; it does not detach recurrent state.
 
-`Trainer(model, optimizer, TrainConfig)` owns input padding, chunk
+`RNNoiseTrainer(model, optimizer, TrainConfig)` owns input padding, chunk
 length, loss, state truncation, gradient averaging, and optimizer updates.
 `run_update(features, target_gain, target_vad, state=...)` obtains its TBPTT
 length from the shared `TrainConfig`, without a duplicate method argument.
