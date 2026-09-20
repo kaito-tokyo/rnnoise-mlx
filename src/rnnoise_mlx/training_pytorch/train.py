@@ -136,8 +136,6 @@ def train(args) -> dict:
     model = RNNoise(config).to(device)
     if args.init_weights:
         load_weights(model, args.init_weights)
-    if getattr(args, "compile", False):
-        model = torch.compile(model, mode=getattr(args, "compile_mode", "reduce-overhead"))
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     loop = RNNoiseTrainer(model, optimizer, train_config)
     signature = {
