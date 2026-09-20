@@ -4,7 +4,6 @@ import os
 import importlib.util
 import tempfile
 import unittest
-from unittest.mock import patch
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -20,16 +19,6 @@ from mlx.utils import tree_flatten
 from rnnoise_mlx.training.checkpoint import load_checkpoint, save_checkpoint
 from rnnoise_mlx.training.model import ModelConfig, RNNoise
 
-
-class PatchHelper:
-    def __init__(self): self._patches=[]
-    def setattr(self, target, name, value=None):
-        item = patch(target, name) if isinstance(target, str) else patch.object(target, name, value)
-        self._patches.append(item); item.start()
-    def setenv(self, name, value):
-        item=patch.dict(os.environ,{name:value}); self._patches.append(item); item.start()
-    def close(self):
-        for item in reversed(self._patches): item.stop()
 
 def _updated_model_and_optimizer():
     mx.random.seed(11)
@@ -72,9 +61,9 @@ def _feature_parameters(tmp_path, content=b"features"):
 
 class CheckpointTests(unittest.TestCase):
     def setUp(self):
-        self._temporary_directory=tempfile.TemporaryDirectory(); self.tmp_path=Path(self._temporary_directory.name); self._patcher=PatchHelper()
+        self._temporary_directory=tempfile.TemporaryDirectory(); self.tmp_path=Path(self._temporary_directory.name)
     def tearDown(self):
-        self._patcher.close(); self._temporary_directory.cleanup()
+        self._temporary_directory.cleanup()
 
     def test_complete_checkpoint_round_trip(self):
         config, model, optimizer = _updated_model_and_optimizer()
@@ -132,21 +121,6 @@ class CheckpointTests(unittest.TestCase):
 
 
     def test_resumed_next_update_matches_uninterrupted_training(self):
-        read_only_random_state = False
-        if read_only_random_state:
-            original_state = mx.random.state
-
-            class ReadOnlyRandomState:
-                def __len__(self):
-                    return len(original_state)
-
-                def __getitem__(self, index):
-                    return original_state[index]
-
-                def __iter__(self):
-                    return iter(original_state)
-
-            self._patcher.setattr(mx.random, "state", ReadOnlyRandomState())
         config, uninterrupted_model, uninterrupted_optimizer = (
             _updated_model_and_optimizer()
         )
