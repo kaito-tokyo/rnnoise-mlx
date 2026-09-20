@@ -42,14 +42,14 @@ python -m pip install -e '.[cuda]'
 ```
 
 Select the PyTorch trainer explicitly with
-`python -m rnnoise_mlx.training_pytorch.train`. The existing `conversion` extra
+`python -m rnnoise_mlx.training_pytorch.cli`. The existing `conversion` extra
 includes PyTorch and Core ML conversion dependencies. For MLX CUDA experiments
 on Linux, use `.[cuda]`.
 
 ### Initial training with PyTorch
 
 ```sh
-python -m rnnoise_mlx.training_pytorch.train data/features/train.npy runs/torch-smoke \
+python -m rnnoise_mlx.training_pytorch.cli data/features/train.npy runs/torch-smoke \
   --device cuda --batch-size 4 --sequence-length 2000 \
   --segmented-tbptt-length 250 --max-updates 3
 ```
@@ -316,3 +316,4 @@ for gain, VAD, and PCM comparisons.
 
 The project is BSD-3-Clause. Vendored upstream files retain their original
 copyright and license notices. See [docs/licensing.md](docs/licensing.md).
+

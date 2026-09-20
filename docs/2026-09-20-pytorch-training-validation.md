@@ -46,7 +46,7 @@ and notebook environment settings were not replaced.
 Invocation:
 
 ```sh
-python -m rnnoise_mlx.training_pytorch.train /content/train.npy NEW_OUTPUT \
+python -m rnnoise_mlx.training_pytorch.cli /content/train.npy NEW_OUTPUT \
   --device cuda --batch-size 4 --sequence-length 2000 \
   --segmented-tbptt-length 250 --max-updates 3 \
   --feature-identity 3dae648bb24075075cccfaa0b22020b5075859506f841bae52429520c0f1ccc4
@@ -91,4 +91,5 @@ The supplied identity is recorded, not independently hashed by this CLI.
 
 training modes are not duplicated. This implementation provides the requested
 full-update model/chunk/loop path and a usable standalone training command.
+
 

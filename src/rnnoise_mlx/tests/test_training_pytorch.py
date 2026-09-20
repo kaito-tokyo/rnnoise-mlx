@@ -27,8 +27,8 @@ from rnnoise_mlx.training_pytorch import (
     RNNoise,
     TrainConfig,
 )
-from rnnoise_mlx.training_pytorch.loop import rnnoise_loss
-from rnnoise_mlx.training_pytorch.train import parser, train
+from rnnoise_mlx.training_pytorch.train import rnnoise_loss, train
+from rnnoise_mlx.training_pytorch.cli import parser
 from rnnoise_mlx.training_pytorch.weights import load_weights, save_weights
 from rnnoise_mlx.training_tools.data import FeatureDataset
 
@@ -345,3 +345,4 @@ class PyTorchTrainingTests(unittest.TestCase):
                     rtol=3e-4,
                     atol=3e-6,
                 )
+
