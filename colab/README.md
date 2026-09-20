@@ -10,11 +10,11 @@ pipx inject google-colab-cli -r requirements-colab-cli-lock.txt
 
 The lock deliberately pins `jupyter-kernel-client==0.15.0`; newer 1.0.x
 releases do not expose the `KernelClient` API expected by Colab CLI 0.7.0.
-Inside the GPU VM, install the project and its CUDA MLX dependencies from
+Inside the GPU VM, install the project and its PyTorch dependencies from
 `pyproject.toml`:
 
 ```sh
-python -m pip install -e '/content/rnnoise-mlx[cuda]'
+python -m pip install -e '/content/rnnoise-mlx[torch]'
 ```
 
 These helpers run an ephemeral Colab GPU runtime from WSL. The training code

@@ -27,18 +27,18 @@ MLX is the default training dependency for Mac:
 python -m pip install -e .
 ```
 
-On Linux and WSL, the default installation uses the CPU MLX backend, so the
-unit tests do not require a GPU. Install the optional CUDA extra only when
-running a CUDA training job:
-
-```sh
-python -m pip install -e '.[cuda]'
-```
-
-Add PyTorch with the optional `torch` extra:
+On Linux and WSL, the base installation does not install MLX. This keeps CPU
+tests and the PyTorch Colab workflow lightweight. Install the PyTorch extra for
+Colab or PyTorch training:
 
 ```sh
 python -m pip install -e '.[torch]'
+```
+
+Install the optional MLX CUDA extra only for MLX CUDA experiments:
+
+```sh
+python -m pip install -e '.[cuda]'
 ```
 
 Select the PyTorch trainer explicitly with
