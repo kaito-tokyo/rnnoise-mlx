@@ -38,7 +38,7 @@ def initial_state(model: RNNoise, train_config: TrainConfig) -> GRUState:
     )
 
 
-def train_update(model, optimizer, train_config, features, target_gain, target_vad, state=None):
+def train_update(model, optimizer, train_config, features, target_gain, target_vad, state=None, *, synchronize=False):
     batch = train_config.batch_size
     segment_length = train_config.tbptt_length
     if batch <= 0 or segment_length <= 0 or train_config.gamma <= 0:
@@ -61,12 +61,12 @@ def train_update(model, optimizer, train_config, features, target_gain, target_v
         weighted.backward(); total_loss = total_loss + weighted.detach()
         state = tuple(s.detach() for s in state)
     optimizer.step()
-    if features.device.type == "cuda":
+    if synchronize and features.device.type == "cuda":
         torch.cuda.synchronize(features.device)
     return total_loss, state
 
 
-def train_update_full(model, optimizer, train_config, features, target_gain, target_vad, state=None):
+def train_update_full(model, optimizer, train_config, features, target_gain, target_vad, state=None, *, synchronize=False):
     """Run one update with full-sequence backpropagation and no TBPTT splits."""
     batch = train_config.batch_size
     if batch <= 0 or train_config.gamma <= 0:
@@ -86,7 +86,7 @@ def train_update_full(model, optimizer, train_config, features, target_gain, tar
     loss = rnnoise_loss(gain, vad, target_gain, target_vad, gamma=train_config.gamma)
     loss.backward()
     optimizer.step()
-    if features.device.type == "cuda":
+    if synchronize and features.device.type == "cuda":
         torch.cuda.synchronize(features.device)
     return loss.detach(), tuple(s.detach() for s in state)
 
