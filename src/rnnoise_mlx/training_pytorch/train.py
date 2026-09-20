@@ -189,11 +189,11 @@ def train(args) -> dict:
                 torch.from_numpy(np.ascontiguousarray(x, dtype=np.float32)).to(device)
                 for x in host_batch
             )
-            result = loop.run_update(*batch, state=state)
-            loss = result.loss.item()
+            loss_tensor, next_state = loop.run_update(*batch, state=state)
+            loss = loss_tensor.item()
             if not np.isfinite(loss):
                 raise FloatingPointError("non-finite training loss")
-            state = result.state if args.carry_between_updates else None
+            state = next_state if args.carry_between_updates else None
             update += 1
             record = {
                 "update": update,

@@ -113,7 +113,7 @@ class PyTorchTrainingTests(unittest.TestCase):
         initial = tuple(s.requires_grad_() for s in loop.initial_state())
         calls = []
         optimizer.register_step_post_hook(lambda *args: calls.append(1))
-        result = loop.run_update(*batch, state=initial)
+        loss, state = loop.run_update(*batch, state=initial)
 
         padded = torch.cat((batch[0].new_zeros(2, 4, 65), batch[0]), dim=1)
         first_gain, first_vad, carry = reference(
@@ -130,14 +130,14 @@ class PyTorchTrainingTests(unittest.TestCase):
         )
         expected = (first_loss + second_loss) / 2
         expected.backward()
-        torch.testing.assert_close(result.loss, expected.detach())
+        torch.testing.assert_close(loss, expected.detach())
         for actual, before in zip(model.parameters(), reference.parameters()):
             torch.testing.assert_close(actual.grad, before.grad)
             torch.testing.assert_close(actual, before - 0.01 * before.grad)
         assert calls == [1]
         assert all(s.grad is None for s in initial)
-        assert all(s.grad_fn is None and not s.requires_grad for s in result.state)
-        loop.run_update(*batch, state=result.state)
+        assert all(s.grad_fn is None and not s.requires_grad for s in state)
+        loop.run_update(*batch, state=state)
         assert calls == [1, 1]
 
 

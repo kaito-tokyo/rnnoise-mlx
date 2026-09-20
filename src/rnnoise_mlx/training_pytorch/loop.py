@@ -1,19 +1,10 @@
 """Segmented TBPTT with one optimizer step per complete sequence batch."""
 
-from dataclasses import dataclass
-
 import torch
 
 from ..training_tools.model_config import TrainConfig
 from .loss import rnnoise_loss
 from .model import GRUState, RNNoise
-
-
-@dataclass
-class TorchUpdateResult:
-    loss: torch.Tensor
-    state: GRUState
-    target_frames: int
 
 
 class PyTorchTrainingLoop:
@@ -92,4 +83,4 @@ class PyTorchTrainingLoop:
         self.optimizer.step()
         if features.device.type == "cuda":
             torch.cuda.synchronize(features.device)
-        return TorchUpdateResult(total_loss, state, frames)
+        return total_loss, state
