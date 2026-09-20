@@ -123,6 +123,9 @@ def train(args) -> dict:
     )
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is not available")
+    if device.type == "cuda":
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cudnn.benchmark = True
     dataset = FeatureDataset(str(args.features), args.sequence_length)
     batches_per_epoch = dataset.sequence_count // args.batch_size
     if batches_per_epoch == 0:
@@ -133,6 +136,8 @@ def train(args) -> dict:
     model = RNNoise(config).to(device)
     if args.init_weights:
         load_weights(model, args.init_weights)
+    if getattr(args, "compile", False):
+        model = torch.compile(model, mode=getattr(args, "compile_mode", "reduce-overhead"))
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     loop = RNNoiseTrainer(model, optimizer, train_config)
     signature = {

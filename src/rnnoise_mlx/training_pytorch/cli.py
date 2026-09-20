@@ -18,6 +18,12 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--gamma", type=float, default=0.25)
     p.add_argument("--seed", type=int, default=141)
     p.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    p.add_argument("--compile", action="store_true", help="compile the model with TorchInductor")
+    p.add_argument(
+        "--compile-mode",
+        choices=("default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"),
+        default="reduce-overhead",
+    )
     p.add_argument("--checkpoint-every", type=int, default=32)
     p.add_argument("--feature-identity")
     p.add_argument("--carry-between-updates", action=argparse.BooleanOptionalAction, default=True)
