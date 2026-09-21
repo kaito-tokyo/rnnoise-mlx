@@ -59,7 +59,7 @@ python -m tools.train_pytorch /content/train.npy NEW_OUTPUT \
 | 3 | 0.302736 | 0.3906989 | 138,038,784 |
 
 Training exited zero and saved final canonical model.safetensors (11,531,644
-bytes), checkpoint.pt (34,665,835 bytes), per-checkpoint canonical weights,
+bytes), checkpoint.ckpt (34,665,835 bytes), per-checkpoint canonical weights,
 configuration, and training_summary.json. Artifacts are in the snapshot's
 `cuda-smoke/training` directory. Training-only wall time includes input transfer
 and synchronized updates; checkpoint writes are outside those timings.

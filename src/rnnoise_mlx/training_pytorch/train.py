@@ -14,7 +14,7 @@ import torch
 from ..training_common.data import FeatureDataset
 from ..config import ModelConfig
 from .model import GRUState, RNNoise
-from .config import TrainConfig
+from .config import TrainConfig, TrainingCheckpoint, TrainingProgress
 from .weights import load_weights, save_weights
 
 
@@ -103,7 +103,7 @@ class RNNoiseTrainer:
 
 
 
-def train(args) -> dict:
+def train(args, *, progress_callback=None, checkpoint_callback=None) -> dict:
     segment = args.segmented_tbptt_length
     if args.batch_size <= 0 or segment <= 0 or args.sequence_length % segment:
         raise ValueError(
@@ -155,7 +155,13 @@ def train(args) -> dict:
     state = None
     history = []
     if args.resume_from:
-        saved = torch.load(args.resume_from, map_location="cpu", weights_only=True)
+        resume_path = args.resume_from
+        if resume_path.is_dir():
+            resume_path = resume_path / "checkpoint.ckpt"
+            if not resume_path.exists():
+                # Compatibility with checkpoints written before the .ckpt name.
+                resume_path = args.resume_from / "checkpoint.pt"
+        saved = torch.load(resume_path, map_location="cpu", weights_only=True)
         if saved.get("format_version") == 1:
             # Migrate checkpoints produced by the earlier chunk-wrapper layout.
             saved["signature"]["training"] = saved["signature"].pop("chunk")
@@ -217,9 +223,11 @@ def train(args) -> dict:
                 if device.type == "cuda"
                 else None,
             },
-            path / "checkpoint.pt.tmp",
+            path / "checkpoint.ckpt.tmp",
         )
-        (path / "checkpoint.pt.tmp").replace(path / "checkpoint.pt")
+        (path / "checkpoint.ckpt.tmp").replace(path / "checkpoint.ckpt")
+        if checkpoint_callback is not None:
+            checkpoint_callback(TrainingCheckpoint(update, path))
 
     print(
         json.dumps(
@@ -259,6 +267,16 @@ def train(args) -> dict:
             if device.type == "cuda":
                 record["peak_allocated_bytes"] = torch.cuda.max_memory_allocated(device)
             history.append(record)
+            if progress_callback is not None:
+                progress_callback(
+                    TrainingProgress(
+                        update=update,
+                        epoch=epoch + 1,
+                        loss=loss,
+                        seconds=record["seconds"],
+                        processed_frames=update * args.batch_size * args.sequence_length,
+                    )
+                )
             print(json.dumps(record), flush=True)
             if update % args.checkpoint_every == 0 or update == target_updates:
                 checkpoint()

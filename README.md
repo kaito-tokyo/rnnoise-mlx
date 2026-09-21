@@ -74,9 +74,9 @@ Both configs are the same classes used by MLX, from
 
 Each run needs a new output directory. `model.safetensors` uses the existing
 canonical MLX/C weight format. Periodic `update-NNNNNNNN/` directories contain
-these weights and a PyTorch `checkpoint.pt` with optimizer and restart state.
+these weights and a PyTorch `checkpoint.ckpt` with optimizer and restart state.
 Use `--init-weights model.safetensors` for a new fine-tuning run, or
-`--resume-from runs/previous/update-00000032/checkpoint.pt` for continuation
+`--resume-from runs/previous/update-00000032/checkpoint.ckpt` for continuation
 into a new output directory. On resume, `--max-updates` is the total update
 limit, including previous updates; keep the original training configuration
 and feature file. Optional `--feature-identity` records the existing preflight
