@@ -11,9 +11,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ..training_tools.data import FeatureDataset
-from ..training_tools.model_config import ModelConfig, TrainConfig
+from ..training_common.data import FeatureDataset
+from ..config import ModelConfig
 from .model import GRUState, RNNoise
+from .config import TrainConfig
 from .weights import load_weights, save_weights
 
 

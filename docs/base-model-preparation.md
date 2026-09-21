@@ -133,7 +133,7 @@ generation time. 10,000 sequences require about 7.84 GB; 200,000 require about
 ## 5. Smoke training
 
 ```sh
-.venv/bin/python -m rnnoise_mlx.training.train data/features/train.npy runs/base-smoke \
+.venv/bin/python -m tools.train_pytorch data/features/train.npy runs/base-smoke \
   --eval-features data/features/eval.npy \
   --batch-size 8 --sequence-length 2000 \
   --segmented-tbptt-length 100 --segmented-tbptt-state carry \

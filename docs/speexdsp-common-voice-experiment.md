@@ -87,7 +87,7 @@ active:
 Run training in the connected Colab shell:
 
 ```sh
-python3 -m rnnoise_mlx.training.train /content/train.npy \
+python3 -m tools.train_pytorch /content/train.npy \
   /content/runs/speexdsp-ja-minus12-final-90h-10k \
   --eval-features /content/eval.npy \
   --batch-size 8 --sequence-length 2000 \

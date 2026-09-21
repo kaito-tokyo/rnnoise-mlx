@@ -3,7 +3,7 @@
 import torch
 from torch import nn
 
-from ..training_tools.model_config import ModelConfig
+from ..config import ModelConfig
 
 GRUState = tuple[torch.Tensor, torch.Tensor, torch.Tensor]
 

@@ -8,12 +8,12 @@ The optional backend lives in `rnnoise_mlx/training_pytorch/`: `graph.py`
 contains the frame-step, chunk objective, and streaming wrapper; `loop.py`
 implements segmented TBPTT; `train.py` provides the CLI, checkpoints and resume;
 `weights.py` reuses the existing PyTorch/canonical conversion functions.
-The model and loss follow `training_cuda/graph.py`; a full sequence batch
+The model and loss follow the PyTorch implementation; a full sequence batch
 performs one Adam step after averaged chunk gradients. Native PyTorch GRUs
 replace the MLX GRU implementation. No torch.compile is required.
 
 Framework-independent configuration and memory-mapped NumPy loading now live
-under `training_tools/`. Existing MLX import paths remain compatibility wrappers.
+under `training_common/`. Existing MLX import paths remain compatibility wrappers.
 PyTorch imports do not load MLX, and importing the root package does not load
 PyTorch. MLX remains the default installation dependency; `[torch]` adds PyTorch.
 
@@ -46,7 +46,7 @@ and notebook environment settings were not replaced.
 Invocation:
 
 ```sh
-python -m rnnoise_mlx.training_pytorch.cli /content/train.npy NEW_OUTPUT \
+python -m tools.train_pytorch /content/train.npy NEW_OUTPUT \
   --device cuda --batch-size 4 --sequence-length 2000 \
   --segmented-tbptt-length 250 --max-updates 3 \
   --feature-identity 3dae648bb24075075cccfaa0b22020b5075859506f841bae52429520c0f1ccc4

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from rnnoise_mlx.training.data import FRAME_DIM
+FRAME_DIM = 98
 
 
 def _sha256(path: Path) -> str:

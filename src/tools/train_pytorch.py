@@ -3,13 +3,13 @@
 import argparse
 from pathlib import Path
 
-from .train import train
+from rnnoise_mlx.training_pytorch.train import train
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("features", type=Path)
     p.add_argument("output", type=Path, help="new output directory")
-    p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--sequence-length", type=int, default=2000)
     p.add_argument("--segmented-tbptt-length", type=int, default=250)
     p.add_argument("--epochs", type=int, default=200)
@@ -20,7 +20,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     p.add_argument("--checkpoint-every", type=int, default=32)
     p.add_argument("--feature-identity")
-    p.add_argument("--carry-between-updates", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--carry-between-updates", action=argparse.BooleanOptionalAction, default=False)
     initial = p.add_mutually_exclusive_group()
     initial.add_argument("--init-weights", type=Path)
     initial.add_argument("--resume-from", type=Path)

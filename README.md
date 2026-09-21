@@ -42,14 +42,14 @@ python -m pip install -e '.[cuda]'
 ```
 
 Select the PyTorch trainer explicitly with
-`python -m rnnoise_mlx.training_pytorch.cli`. The existing `conversion` extra
+`python -m tools.train_pytorch`. The existing `conversion` extra
 includes PyTorch and Core ML conversion dependencies. For MLX CUDA experiments
 on Linux, use `.[cuda]`.
 
 ### Initial training with PyTorch
 
 ```sh
-python -m rnnoise_mlx.training_pytorch.cli data/features/train.npy runs/torch-smoke \
+python -m tools.train_pytorch data/features/train.npy runs/torch-smoke \
   --device cuda --batch-size 4 --sequence-length 2000 \
   --segmented-tbptt-length 250 --max-updates 3
 ```
@@ -68,9 +68,9 @@ inference branch; it does not detach recurrent state.
 `RNNoiseTrainer(model, optimizer, TrainConfig)` owns input padding, chunk
 length, loss, state truncation, gradient averaging, and optimizer updates.
 `run_update(features, target_gain, target_vad, state=...)` obtains its TBPTT
-length from the shared `TrainConfig`, without a duplicate method argument.
+length from the PyTorch `TrainConfig`, without a duplicate method argument.
 Both configs are the same classes used by MLX, from
-`rnnoise_mlx.training_tools.model_config`.
+`rnnoise_mlx.config`.
 
 Each run needs a new output directory. `model.safetensors` uses the existing
 canonical MLX/C weight format. Periodic `update-NNNNNNNN/` directories contain
@@ -97,7 +97,7 @@ to MLX, even though the converted forward computation and objective match.
 ```sh
 /opt/homebrew/opt/python@3.14/bin/python3.14 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m rnnoise_mlx.training.train data/features/train.npy runs/smoke \
+.venv/bin/python -m tools.train_pytorch data/features/train.npy runs/smoke \
   --batch-size 8 \
   --sequence-length 2000 \
   --max-updates 320 \
@@ -182,12 +182,12 @@ less GPU memory for this segmented RNN workload. Use `--compile` only when its
 performance and memory impact has been measured for the selected batch and
 segment sizes; `--no-compile` remains accepted and is the default.
 
-For fixed 250-frame segmented TBPTT experiments, `--graph-mode compiled_chunk`
+For fixed 250-frame segmented TBPTT experiments, ``
 is the graph-reuse diagnostic path. It compiles the fixed-shape first-chunk,
 next-chunk, and optimizer-update functions separately and reuses them across
 updates. It requires `--segmented-tbptt-length 250`, keeps the full-sequence
 update semantics, and is intentionally separate from `--compile`. The default
-`graph-mode dynamic` remains the reference path until CUDA Graph counts,
+the PyTorch dynamic training path remains the reference path until CUDA Graph counts,
 memory, throughput, and loss/checkpoint equivalence have been compared.
 The recurrent carry is an explicit fixed-structure input/output of the chunk
 function; it is not rebuilt as a Python-side graph between chunks.
@@ -236,7 +236,7 @@ contains model weights, AdamW state, MLX random state, the data cursor, elapsed
 counters, and training history. Resume with:
 
 ```sh
-python -m rnnoise_mlx.training.train ... \
+python -m tools.train_pytorch ... \
   --resume-from OUTPUT/checkpoints/update-00000500
 ```
 

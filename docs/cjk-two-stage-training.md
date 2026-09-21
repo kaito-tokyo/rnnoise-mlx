@@ -62,7 +62,7 @@ python -m rnnoise_mlx.tools.generate_features \
 Train with immutable 1,000-update generations:
 
 ```sh
-python -m rnnoise_mlx.training.train \
+python -m tools.train_pytorch \
   data/cjk-cleaner/features/train.npy runs/cjk-cleaner-10k \
   --eval-features data/cjk-cleaner/features/eval.npy \
   --batch-size 8 --sequence-length 2000 \

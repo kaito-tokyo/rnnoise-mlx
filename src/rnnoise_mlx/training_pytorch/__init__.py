@@ -1,6 +1,7 @@
 """Optional PyTorch training backend; no MLX imports."""
 
-from ..training_tools.model_config import ModelConfig, TrainConfig
+from ..config import ModelConfig
+from .config import TrainConfig
 from .train import RNNoiseTrainer, initial_state, train_update, train_update_full
 from .model import RNNoise
 

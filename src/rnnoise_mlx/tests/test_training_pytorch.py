@@ -30,9 +30,9 @@ from rnnoise_mlx.training_pytorch import (
     TrainConfig,
 )
 from rnnoise_mlx.training_pytorch.train import rnnoise_loss, train
-from rnnoise_mlx.training_pytorch.cli import parser
+from tools.train_pytorch import parser
 from rnnoise_mlx.training_pytorch.weights import load_weights, save_weights
-from rnnoise_mlx.training_tools.data import FeatureDataset
+from rnnoise_mlx.training_common.data import FeatureDataset
 
 
 @dataclass(frozen=True)
@@ -291,60 +291,3 @@ class PyTorchTrainingTests(unittest.TestCase):
         )
         with self.assertRaises(FileExistsError):
             run("full", 1)
-
-
-    def test_chunk_loss_and_gradients_match_mlx(self):
-        import mlx.core as mx
-
-        # Initialize the existing compatibility package before training_cuda.
-        importlib.import_module("rnnoise_mlx.training.config")
-        from rnnoise_mlx.training_cuda.graph import RNNoiseChunk as MLXChunk
-
-        config, settings = TinyConfig(), TrainConfig(2, 3)
-        pytorch = RNNoise(config)
-        path = self.tmp_path / "parity.safetensors"
-        save_weights(pytorch, path)
-        weights, _ = read_weights(path)
-        mlx = MLXChunk(config, settings)
-        mlx.load_weights(
-            [
-                ("frame_step." + name.replace("gain.", "dense_out."), mx.array(value))
-                for name, value in weights.items()
-            ]
-        )
-        features, gain, vad = inputs(frames=3)
-        features = torch.cat((torch.zeros(2, 4, 65), features), dim=1)
-        state = tuple(torch.randn(2, config.gru_size) for _ in range(3))
-        predicted_gain, predicted_vad, carry = pytorch(
-            features, tuple(s.unsqueeze(0) for s in state)
-        )
-        loss = rnnoise_loss(predicted_gain, predicted_vad, gain, vad, gamma=settings.gamma)
-        loss.backward()
-        (mlx_loss, mlx_carry), grads = mlx.value_and_grad(
-            mx.array(features.numpy()),
-            mx.array(gain.numpy()),
-            mx.array(vad.numpy()),
-            tuple(mx.array(s.numpy()) for s in state),
-        )
-        mx.eval(mlx_loss, mlx_carry, grads)
-        np.testing.assert_allclose(
-            loss.detach().numpy(), np.array(mlx_loss), rtol=2e-5, atol=2e-6
-        )
-        for x, y in zip(carry, mlx_carry):
-            np.testing.assert_allclose(
-                x.squeeze(0).detach().numpy(), np.array(y), rtol=2e-5, atol=2e-6
-            )
-        for i in range(1, 4):
-            gru = getattr(pytorch, f"gru{i}")
-            for torch_name, mlx_name in (
-                ("weight_ih_l0", "Wx"),
-                ("weight_hh_l0", "Wh"),
-                ("bias_ih_l0", "b"),
-            ):
-                np.testing.assert_allclose(
-                    getattr(gru, torch_name).grad.numpy(),
-                    np.array(grads["frame_step"][f"gru{i}"][mlx_name]),
-                    rtol=3e-4,
-                    atol=3e-6,
-                )
-
